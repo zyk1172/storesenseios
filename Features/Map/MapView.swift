@@ -288,6 +288,7 @@ struct ItemDetailView: View {
     @State private var showCamera = false
     @State private var capturedImage: UIImage?
     @State private var isRefining = false
+    @State private var isRefineFinished = false
     @State private var refineError: String?
     @State private var refreshID = UUID()  // 用于强制刷新UI
     @AppStorage("openai_api_key") private var apiKey = ""
@@ -369,6 +370,15 @@ struct ItemDetailView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .overlay {
+            if isRefining {
+                ZStack {
+                    Color.black.opacity(0.4).ignoresSafeArea()
+                    AILoadingView(title: "正在重新识别...", isFinished: $isRefineFinished)
+                        .padding(.horizontal, 40)
+                }
+            }
+        }
     }
 
     // MARK: - 原图 + 定位标记
@@ -705,6 +715,7 @@ struct ItemDetailView: View {
         }
         
         isRefining = true
+        isRefineFinished = false
         let capturedItemId = item.id
         let capturedLocationId = location?.id
         let capturedCoordX = item.coordX
@@ -731,6 +742,13 @@ struct ItemDetailView: View {
                 }
                 
                 print("   识别到: \(firstItem.name)")
+                
+                await MainActor.run {
+                    isRefineFinished = true
+                }
+                
+                // 等待半秒让进度条100%动画播放完
+                try? await Task.sleep(nanoseconds: 500_000_000)
                 
                 await MainActor.run {
                     // 在主线程更新item

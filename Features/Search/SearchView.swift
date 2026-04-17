@@ -20,6 +20,7 @@ struct SearchView: View {
     @State private var selected: SearchResult?
     @State private var searchMode: SearchMode = .normal
     @State private var isSearching = false
+    @State private var isSearchFinished = false
     @State private var searchError: String?
 
     private let storage = ObjectStorageService()
@@ -102,11 +103,12 @@ struct SearchView: View {
                         }
                     }
                 } else if isSearching {
-                    VStack(spacing: 20) {
-                        ProgressView()
-                        Text("智能搜索中...")
-                            .font(.subheadline)
-                            .foregroundStyle(.secondary)
+                    VStack {
+                        Spacer()
+                        AILoadingView(title: "智能搜索中...", isFinished: $isSearchFinished)
+                            .padding(.horizontal, 40)
+                        Spacer()
+                        Spacer() // 下方多一点空白，使它更贴近视觉中心
                     }
                     .frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if let error = searchError {
@@ -209,6 +211,7 @@ struct SearchView: View {
         }
         
         isSearching = true
+        isSearchFinished = false
         searchError = nil
         
         Task {
@@ -224,6 +227,13 @@ struct SearchView: View {
                 }
                 
                 let matchedItems = try await searchWithAI(query: searchText, items: allItems)
+                
+                await MainActor.run {
+                    isSearchFinished = true
+                }
+                
+                // 等待半秒让进度条100%动画播放完
+                try? await Task.sleep(nanoseconds: 500_000_000)
                 
                 await MainActor.run {
                     results = matchedItems

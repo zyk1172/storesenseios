@@ -1,4 +1,37 @@
 import SwiftUI
+import UniformTypeIdentifiers
+
+// 通过 @unchecked Sendable 告诉 Swift 6 这只是单纯的数据载体，不受 Actor 约束
+struct BackupData: Codable, @unchecked Sendable {
+    let rooms: [StorageLocation]
+    let groups: [StorageGroup]
+}
+
+struct BackupDocument: FileDocument {
+    static var readableContentTypes: [UTType] { [.json] }
+    var data: BackupData
+
+    init(data: BackupData) {
+        self.data = data
+    }
+
+    init(configuration: ReadConfiguration) throws {
+        guard let fileData = configuration.file.regularFileContents else {
+            throw CocoaError(.fileReadCorruptFile)
+        }
+        
+        // 在 Swift 6 的非隔离上下文中，通过 assumeIsolated 或者创建一个非隔离的解码器
+        let decoder = JSONDecoder()
+        self.data = try decoder.decode(BackupData.self, from: fileData)
+    }
+
+    func fileWrapper(configuration: WriteConfiguration) throws -> FileWrapper {
+        let encoder = JSONEncoder()
+        encoder.outputFormatting = .prettyPrinted
+        let encodedData = try encoder.encode(self.data)
+        return FileWrapper(regularFileWithContents: encodedData)
+    }
+}
 
 struct SettingsView: View {
     @AppStorage("openai_api_key") private var apiKey = ""
@@ -7,14 +40,23 @@ struct SettingsView: View {
     @State private var showKey = false
     @State private var isTesting = false
     @State private var testResult: String?
+    
+    // 备份与恢复状态
+    @State private var isExporting = false
+    @State private var isImporting = false
+    @State private var exportDoc: BackupDocument?
+    @State private var backupMessage: String?
 
-    // 默认的建议模型列表
-    private let suggestedModels = [
-        "gpt-4o", 
-        "gpt-4o-mini", 
-        "claude-3-5-sonnet-20241022", 
-        "deepseek-chat", 
-        "gemini-2.0-flash"
+    @EnvironmentObject var appState: AppState
+
+    // 预设模型选项 (使用 String(localized:) 以支持多语言提取)
+    private let presetModels = [
+        (String(localized: "ChatGPT (gpt-4o)"), "gpt-4o"),
+        (String(localized: "DeepSeek (deepseek-chat)"), "deepseek-chat"),
+        (String(localized: "千问 (qwen-vl-plus)"), "qwen-vl-plus"),
+        (String(localized: "豆包 (ep-xxx)"), "ep-xxx"),
+        (String(localized: "谷歌 (gemini-1.5-pro)"), "gemini-1.5-pro"),
+        (String(localized: "小米 (MiLM-Vision)"), "MiLM-Vision")
     ]
 
     var body: some View {
@@ -50,46 +92,45 @@ struct SettingsView: View {
 
             Section {
                 VStack(alignment: .leading, spacing: 12) {
+                    HStack {
+                        Text("常用模型")
+                        Spacer()
+                        Picker("", selection: Binding(
+                            get: {
+                                if presetModels.contains(where: { $0.1 == model }) {
+                                    return model
+                                } else {
+                                    return ""
+                                }
+                            },
+                            set: { newValue in
+                                if !newValue.isEmpty {
+                                    model = newValue
+                                }
+                            }
+                        )) {
+                            ForEach(presetModels, id: \.1) { name, id in
+                                Text(name).tag(id)
+                            }
+                            Text("自定义...").tag("")
+                        }
+                        .pickerStyle(.menu)
+                    }
+                    
                     Text("当前模型名称")
                         .font(.subheadline)
                         .foregroundStyle(.secondary)
                     
-                    // 💡 这里是手动填写的地方，点击即可输入任何模型名
                     TextField("输入自定义模型名称...", text: $model)
                         .textFieldStyle(.roundedBorder)
                         .autocorrectionDisabled()
                         .autocapitalization(.none)
-                    
-                    Text("常用模型快捷选择：")
-                        .font(.caption)
-                        .foregroundStyle(.tertiary)
-                    
-                    // 快捷选择列表
-                    ScrollView(.horizontal, showsIndicators: false) {
-                        HStack(spacing: 8) {
-                            ForEach(suggestedModels, id: \.self) { m in
-                                Button(m) {
-                                    model = m // 点击自动填入上方输入框
-                                }
-                                .font(.caption)
-                                .padding(.horizontal, 10)
-                                .padding(.vertical, 6)
-                                .background(model == m ? Color.blue : Color(.tertiarySystemBackground))
-                                .foregroundStyle(model == m ? .white : .primary)
-                                .cornerRadius(8)
-                                .overlay(
-                                    RoundedRectangle(cornerRadius: 8)
-                                        .stroke(Color.secondary.opacity(0.3), lineWidth: 0.5)
-                                )
-                            }
-                        }
-                    }
                 }
                 .padding(.vertical, 8)
             } header: {
                 Text("模型设置")
             } footer: {
-                Text("你可以手动输入任何兼容 OpenAI 接口的模型名称（如 deepseek-reasoner 等）。")
+                Text("你可以从下拉菜单选择常用模型，或手动输入任何兼容 OpenAI 接口的多模态模型名称。")
             }
 
             Section {
@@ -137,6 +178,56 @@ struct SettingsView: View {
                 Text("使用当前配置的 API Key、Base URL 和模型发送测试请求。")
             }
             
+            // 数据备份与恢复
+            Section {
+                Button("导出备份到文件 / iCloud") {
+                    exportDoc = BackupDocument(data: BackupData(rooms: appState.rooms, groups: appState.groups))
+                    isExporting = true
+                }
+                
+                Button("从文件 / iCloud 导入备份") {
+                    isImporting = true
+                }
+            } header: {
+                Text("数据备份与恢复")
+            } footer: {
+                Text(backupMessage ?? String(localized: "通过系统文件管理器，你可以将数据安全地备份到 iCloud、OneDrive 或本地设备中。"))
+                    .foregroundColor(backupMessage != nil ? .blue : .secondary)
+            }
+            .fileExporter(isPresented: $isExporting, document: exportDoc, contentType: .json, defaultFilename: "StoreSenseBackup") { result in
+                switch result {
+                case .success:
+                    backupMessage = String(localized: "导出成功！")
+                case .failure(let error):
+                    let errorMsg = error.localizedDescription
+                    backupMessage = String(localized: "导出失败：\(errorMsg)")
+                }
+            }
+            .fileImporter(isPresented: $isImporting, allowedContentTypes: [.json]) { result in
+                switch result {
+                case .success(let url):
+                    do {
+                        guard url.startAccessingSecurityScopedResource() else { return }
+                        defer { url.stopAccessingSecurityScopedResource() }
+                        let data = try Data(contentsOf: url)
+                        let backup = try JSONDecoder().decode(BackupData.self, from: data)
+                        // 将导入的数据合并/覆盖保存到本地存储
+                        let storage = ObjectStorageService()
+                        backup.groups.forEach { storage.saveGroup($0) }
+                        backup.rooms.forEach { storage.saveRoom($0) }
+                        appState.loadGroups()
+                        appState.loadRooms()
+                        let count = backup.rooms.count
+                        backupMessage = String(localized: "导入成功，已恢复 \(count) 个收纳位！")
+                    } catch {
+                        backupMessage = String(localized: "导入失败：格式不正确或读取失败")
+                    }
+                case .failure(let error):
+                    let errorMsg = error.localizedDescription
+                    backupMessage = String(localized: "导入失败：\(errorMsg)")
+                }
+            }
+            
             Section {
                 Button {
                     rebuildSearchIndex()
@@ -167,8 +258,6 @@ struct SettingsView: View {
         .navigationTitle("设置")
     }
     
-    @EnvironmentObject var appState: AppState
-    
     private func rebuildSearchIndex() {
         appState.rebuildSearchIndex()
     }
@@ -189,7 +278,7 @@ struct SettingsView: View {
 
             let urlString = base.appending("/chat/completions")
             guard let url = URL(string: urlString) else {
-                testResult = "❌ 无效的 URL"
+                testResult = String(localized: "❌ 无效的 URL")
                 isTesting = false
                 return
             }
@@ -212,22 +301,23 @@ struct SettingsView: View {
             let (data, response) = try await URLSession.shared.data(for: request)
 
             guard let httpResponse = response as? HTTPURLResponse else {
-                testResult = "❌ 无效的响应"
+                testResult = String(localized: "❌ 无效的响应")
                 isTesting = false
                 return
             }
 
             if httpResponse.statusCode == 200 {
-                testResult = "✅ API 连接成功！"
+                testResult = String(localized: "✅ API 连接成功！")
             } else {
                 let errorJson = try? JSONSerialization.jsonObject(with: data) as? [String: Any]
                 let detail = (errorJson?["error"] as? [String: Any])?["message"] as? String
                             ?? (errorJson?["message"] as? String)
                             ?? "HTTP \(httpResponse.statusCode)"
-                testResult = "❌ 连接失败: \(detail)"
+                testResult = String(localized: "❌ 连接失败: \(detail)")
             }
         } catch {
-            testResult = "❌ 连接失败: \(error.localizedDescription)"
+            let errorMsg = error.localizedDescription
+            testResult = String(localized: "❌ 连接失败: \(errorMsg)")
         }
 
         isTesting = false

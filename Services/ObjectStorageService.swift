@@ -6,7 +6,12 @@ class ObjectStorageService {
         fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
             .appendingPathComponent("storage_locations.json")
     }
-    
+
+    private var groupsURL: URL {
+        fileManager.urls(for: .documentDirectory, in: .userDomainMask)[0]
+            .appendingPathComponent("storage_groups.json")
+    }
+
     private let searchIndexService = SearchIndexService.shared
 
     /// 🚀 保存或更新：根据 ID 匹配，存在则覆盖（实现更新功能）
@@ -48,6 +53,34 @@ class ObjectStorageService {
         
         // 删除房间的所有搜索索引
         searchIndexService.removeRoomIndex(location)
+    }
+
+    func saveGroup(_ group: StorageGroup) {
+        var all = fetchAllGroups()
+        if let index = all.firstIndex(where: { $0.id == group.id }) {
+            all[index] = group
+        } else {
+            all.append(group)
+        }
+        if let data = try? JSONEncoder().encode(all) {
+            try? data.write(to: groupsURL)
+        }
+    }
+
+    func fetchAllGroups() -> [StorageGroup] {
+        guard let data = try? Data(contentsOf: groupsURL),
+              let groups = try? JSONDecoder().decode([StorageGroup].self, from: data) else {
+            return []
+        }
+        return groups
+    }
+
+    func deleteGroup(_ group: StorageGroup) {
+        var all = fetchAllGroups()
+        all.removeAll { $0.id == group.id }
+        if let data = try? JSONEncoder().encode(all) {
+            try? data.write(to: groupsURL)
+        }
     }
 
     func searchObjects(query: String) -> [(location: StorageLocation, item: StorageItem)] {

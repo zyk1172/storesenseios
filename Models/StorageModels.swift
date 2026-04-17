@@ -1,8 +1,21 @@
 import Foundation
 
+struct StorageGroup: Identifiable, Codable {
+    let id: UUID
+    var name: String
+    var createdAt: Date
+
+    init(name: String) {
+        self.id = UUID()
+        self.name = name
+        self.createdAt = Date()
+    }
+}
+
 struct StorageLocation: Identifiable, Codable {
     let id: UUID
     var name: String
+    var groupName: String
     var createdAt: Date
     var updatedAt: Date
     var items: [StorageItem]
@@ -18,12 +31,29 @@ struct StorageLocation: Identifiable, Codable {
         case textInput
     }
 
-    init(name: String) {
+    init(name: String, groupName: String = "默认") {
         self.id = UUID()
         self.name = name
+        self.groupName = groupName
         self.createdAt = Date()
         self.updatedAt = Date()
         self.items = []
+    }
+
+    init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        id = try container.decode(UUID.self, forKey: .id)
+        name = try container.decode(String.self, forKey: .name)
+        groupName = (try? container.decode(String.self, forKey: .groupName)) ?? "默认"
+        createdAt = try container.decode(Date.self, forKey: .createdAt)
+        updatedAt = try container.decode(Date.self, forKey: .updatedAt)
+        items = try container.decode([StorageItem].self, forKey: .items)
+        backgroundImageData = try? container.decode(Data.self, forKey: .backgroundImageData)
+        coverImageData = try? container.decode(Data.self, forKey: .coverImageData)
+        anchorItemName = try? container.decode(String.self, forKey: .anchorItemName)
+        inputType = try? container.decode(InputType.self, forKey: .inputType)
+        organizingAdvice = try? container.decode(String.self, forKey: .organizingAdvice)
+        funnyComment = try? container.decode(String.self, forKey: .funnyComment)
     }
 }
 

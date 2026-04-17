@@ -1,36 +1,136 @@
 import SwiftUI
 
+// 新增：排序枚举
+enum SortType: String, CaseIterable {
+    case name = "名称"
+    case date = "创建时间"
+}
+
 struct ScanView: View {
     @EnvironmentObject var appState: AppState
     @Binding var selectedTab: ContentView.Tab
     @State private var showCreateRoom = false
     @State private var newRoomName = ""
+    @State private var selectedGroupName = ""
+    @State private var showCreateGroup = false
+    @State private var newGroupName = ""
     @State private var selectedLocation: StorageLocation?
     @State private var locationToDelete: StorageLocation?
     @State private var showDeleteConfirm = false
+    @State private var showNoGroupAlert = false
     
+    // 记录被折叠的收纳组名称
+    @State private var collapsedGroups: Set<String> = []
+    
+    // MARK: - 编辑与排序状态
+    @State private var isSelectionMode = false
+    @State private var isSortingMode = false
+    @State private var selectedLocations: Set<UUID> = []
+    @State private var selectedGroups: Set<String> = []
+    @State private var showMultiDeleteConfirm = false
+    
+    @AppStorage("customGroupOrder") private var customGroupOrder: String = ""
+    @AppStorage("customLocationOrder") private var customLocationOrder: String = ""
+    
+    private var groupOrder: [String] {
+        customGroupOrder.isEmpty ? [] : customGroupOrder.components(separatedBy: ",")
+    }
+    
+    private var locationOrder: [String] {
+        customLocationOrder.isEmpty ? [] : customLocationOrder.components(separatedBy: ",")
+    }
+
     // 克莱因蓝颜色
     private let kleinBlue = Color(red: 0.0, green: 0.18, blue: 0.65)
 
     var body: some View {
         NavigationView {
             VStack {
-                if appState.rooms.isEmpty {
+                if appState.rooms.isEmpty && appState.groups.isEmpty {
                     emptyStateView
+                } else if isSortingMode {
+                    sortingListView
                 } else {
                     locationListView
                 }
             }
-            .navigationTitle("我的收纳位")
+            .navigationTitle(isSelectionMode ? "选择项目" : (isSortingMode ? "拖动排序" : "我的收纳位"))
+            .navigationBarTitleDisplayMode(isSelectionMode || isSortingMode ? .inline : .large)
             .toolbar {
+                // 左侧按钮：多选模式下的「删除」按钮
+                ToolbarItem(placement: .navigationBarLeading) {
+                    if isSelectionMode {
+                        Button {
+                            showMultiDeleteConfirm = true
+                        } label: {
+                            Text("删除")
+                                .foregroundColor(selectedLocations.isEmpty && selectedGroups.isEmpty ? .secondary : .red)
+                        }
+                        .disabled(selectedLocations.isEmpty && selectedGroups.isEmpty)
+                    }
+                }
+                
+                // 右侧按钮组合
                 ToolbarItem(placement: .navigationBarTrailing) {
-                    Button { showCreateRoom = true } label: {
-                        Image(systemName: "plus.circle")
+                    if isSelectionMode || isSortingMode {
+                        Button {
+                            withAnimation {
+                                isSelectionMode = false
+                                isSortingMode = false
+                                selectedLocations.removeAll()
+                                selectedGroups.removeAll()
+                            }
+                        } label: {
+                            Text("完成").bold()
+                        }
+                    } else {
+                        HStack(spacing: 16) {
+                            // 编辑菜单
+                            if !appState.groups.isEmpty || !appState.rooms.isEmpty {
+                                Menu {
+                                    Button {
+                                        withAnimation { isSortingMode = true }
+                                    } label: {
+                                        Label("排序", systemImage: "arrow.up.arrow.down")
+                                    }
+                                    
+                                    Button {
+                                        withAnimation { isSelectionMode = true }
+                                    } label: {
+                                        Label("选择", systemImage: "checkmark.circle")
+                                    }
+                                } label: {
+                                    Image(systemName: "ellipsis.circle")
+                                }
+                            }
+                            
+                            // 新建菜单
+                            Menu {
+                                Button { showCreateGroup = true } label: {
+                                    Label("新建收纳组", systemImage: "folder.badge.plus")
+                                }
+                                Button { 
+                                    if appState.groups.isEmpty {
+                                        showNoGroupAlert = true
+                                    } else {
+                                        selectedGroupName = appState.groups.first?.name ?? ""
+                                        showCreateRoom = true 
+                                    }
+                                } label: {
+                                    Label("新建收纳位", systemImage: "plus.circle")
+                                }
+                            } label: {
+                                Image(systemName: "plus.circle")
+                            }
+                        }
                     }
                 }
             }
             .sheet(isPresented: $showCreateRoom) {
                 createRoomView
+            }
+            .sheet(isPresented: $showCreateGroup) {
+                createGroupView
             }
             .sheet(item: $selectedLocation) { location in
                 LocationDetailView(location: location, selectedTab: $selectedTab)
@@ -47,6 +147,28 @@ struct ScanView: View {
                 }
                 Button("取消", role: .cancel) {}
             }
+            .confirmationDialog(
+                "确定删除选中的收纳组和收纳位？",
+                isPresented: $showMultiDeleteConfirm,
+                titleVisibility: .visible
+            ) {
+                Button("删除", role: .destructive) {
+                    withAnimation {
+                        performMultiDelete()
+                    }
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("删除收纳组将同时删除其内部的所有收纳位及其物品。此操作不可撤销。")
+            }
+            .alert("需要先建立收纳组", isPresented: $showNoGroupAlert) {
+                Button("去创建收纳组") {
+                    showCreateGroup = true
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("在创建收纳位之前，请先创建一个收纳组（例如：书房、主卧）。")
+            }
         }
         .navigationViewStyle(.stack)
     }
@@ -56,37 +178,266 @@ struct ScanView: View {
             Image(systemName: "archivebox")
                 .font(.system(size: 80))
                 .foregroundStyle(.secondary)
-            Text("还没有收纳位")
+            Text("还没有收纳体系")
                 .font(.headline)
-            Text("点击右上角的 + 号创建你的第一个收纳位")
+            Text("请先建立一个收纳组，然后再创建你的收纳位")
                 .font(.subheadline)
                 .foregroundStyle(.secondary)
                 .multilineTextAlignment(.center)
-            Button("立即创建") { showCreateRoom = true }
-                .buttonStyle(.borderedProminent)
+            Button("创建收纳组") { 
+                showCreateGroup = true
+            }
+            .buttonStyle(.borderedProminent)
         }
         .padding()
     }
 
     private var locationListView: some View {
         ScrollView {
-            LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-                ForEach(appState.rooms) { location in
-                    LocationCard(location: location, kleinBlue: kleinBlue)
-                        .onTapGesture {
-                            selectedLocation = location
-                        }
-                        .contextMenu {
-                            Button(role: .destructive) {
-                                locationToDelete = location
-                                showDeleteConfirm = true
-                            } label: {
-                                Label("删除", systemImage: "trash")
+            LazyVStack(spacing: 20, pinnedViews: .sectionHeaders) {
+                // 遍历经过排序的收纳组
+                ForEach(sortedGroups, id: \.self) { groupName in
+                    Section {
+                        LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
+                            // 折叠状态下为空数组，触发移除动画
+                            let locations = collapsedGroups.contains(groupName) ? [] : sortedLocations(for: groupName)
+                            ForEach(locations) { location in
+                                ZStack(alignment: .topTrailing) {
+                                    LocationCard(location: location, kleinBlue: kleinBlue)
+                                        .opacity(isSelectionMode && !selectedLocations.contains(location.id) ? 0.7 : 1.0)
+                                        .onTapGesture {
+                                            if isSelectionMode {
+                                                toggleLocationSelection(location, groupName: groupName)
+                                            } else {
+                                                selectedLocation = location
+                                            }
+                                        }
+                                        .contextMenu {
+                                            if !isSelectionMode {
+                                                Button(role: .destructive) {
+                                                    locationToDelete = location
+                                                    showDeleteConfirm = true
+                                                } label: {
+                                                    Label("删除", systemImage: "trash")
+                                                }
+                                            }
+                                        }
+                                    
+                                    // 选择框 Overlay
+                                    if isSelectionMode {
+                                        Image(systemName: selectedLocations.contains(location.id) ? "checkmark.circle.fill" : "circle")
+                                            .font(.title2)
+                                            .foregroundColor(selectedLocations.contains(location.id) ? .blue : .secondary.opacity(0.5))
+                                            .background(Circle().fill(Color(.systemBackground)).padding(2))
+                                            .padding(8)
+                                    }
+                                }
                             }
                         }
+                    } header: {
+                        groupHeader(groupName: groupName)
+                    }
                 }
             }
             .padding()
+        }
+    }
+    
+    // MARK: - 原生拖拽排序视图
+    private var sortingListView: some View {
+        List {
+            Section {
+                ForEach(sortedGroups, id: \.self) { group in
+                    Text(group)
+                }
+                .onMove(perform: moveGroup)
+            } header: {
+                Text("收纳组大类排序")
+            } footer: {
+                Text("按住右侧把手上下拖动")
+            }
+            
+            ForEach(sortedGroups, id: \.self) { group in
+                let locs = sortedLocations(for: group)
+                if !locs.isEmpty {
+                    Section {
+                        ForEach(locs) { loc in
+                            HStack {
+                                Image(systemName: "archivebox")
+                                    .foregroundStyle(.blue)
+                                Text(loc.name)
+                            }
+                        }
+                        .onMove { source, dest in
+                            moveLocation(in: group, from: source, to: dest)
+                        }
+                    } header: {
+                        Text("\(group) - 内部排序")
+                    }
+                }
+            }
+        }
+        .environment(\.editMode, .constant(.active))
+    }
+
+    // MARK: - 排序与数据源支持
+    
+    private var groupedRooms: [String: [StorageLocation]] {
+        Dictionary(grouping: appState.rooms, by: { $0.groupName })
+    }
+    
+    private var sortedGroups: [String] {
+        var allGroupNames = Set(groupedRooms.keys)
+        appState.groups.forEach { allGroupNames.insert($0.name) }
+        
+        let order = groupOrder
+        return Array(allGroupNames).sorted { a, b in
+            let indexA = order.firstIndex(of: a) ?? Int.max
+            let indexB = order.firstIndex(of: b) ?? Int.max
+            if indexA == indexB {
+                let dateA = appState.groups.first(where: { $0.name == a })?.createdAt ?? Date.distantPast
+                let dateB = appState.groups.first(where: { $0.name == b })?.createdAt ?? Date.distantPast
+                return dateA < dateB
+            }
+            return indexA < indexB
+        }
+    }
+    
+    private func sortedLocations(for groupName: String) -> [StorageLocation] {
+        let locs = groupedRooms[groupName] ?? []
+        let order = locationOrder
+        return locs.sorted { a, b in
+            let indexA = order.firstIndex(of: a.id.uuidString) ?? Int.max
+            let indexB = order.firstIndex(of: b.id.uuidString) ?? Int.max
+            if indexA == indexB {
+                return a.createdAt < b.createdAt
+            }
+            return indexA < indexB
+        }
+    }
+    
+    private func moveGroup(from source: IndexSet, to destination: Int) {
+        var currentOrder = sortedGroups
+        currentOrder.move(fromOffsets: source, toOffset: destination)
+        customGroupOrder = currentOrder.joined(separator: ",")
+    }
+    
+    private func moveLocation(in groupName: String, from source: IndexSet, to destination: Int) {
+        var currentLocs = sortedLocations(for: groupName)
+        currentLocs.move(fromOffsets: source, toOffset: destination)
+        
+        var order = locationOrder
+        let locIds = currentLocs.map { $0.id.uuidString }
+        // 移除旧的位置，重新放到最后（局部顺序完美保留，而且不会影响全局其他组）
+        order.removeAll(where: { locIds.contains($0) })
+        order.append(contentsOf: locIds)
+        customLocationOrder = order.joined(separator: ",")
+    }
+
+    // MARK: - 选择模式逻辑
+    
+    private func toggleGroupSelection(_ groupName: String) {
+        if selectedGroups.contains(groupName) {
+            // 取消全选
+            selectedGroups.remove(groupName)
+            let locs = groupedRooms[groupName] ?? []
+            for loc in locs {
+                selectedLocations.remove(loc.id)
+            }
+        } else {
+            // 全选该组所有物品
+            selectedGroups.insert(groupName)
+            let locs = groupedRooms[groupName] ?? []
+            for loc in locs {
+                selectedLocations.insert(loc.id)
+            }
+        }
+    }
+    
+    private func toggleLocationSelection(_ location: StorageLocation, groupName: String) {
+        if selectedLocations.contains(location.id) {
+            selectedLocations.remove(location.id)
+            // 一旦取消选中任意一个子项，组的全选状态也取消
+            selectedGroups.remove(groupName)
+        } else {
+            selectedLocations.insert(location.id)
+            // 检查该组下是否已全部选中
+            let allIds = (groupedRooms[groupName] ?? []).map { $0.id }
+            if !allIds.isEmpty && Set(allIds).isSubset(of: selectedLocations) {
+                selectedGroups.insert(groupName)
+            }
+        }
+    }
+    
+    private func performMultiDelete() {
+        // 先删除选中的收纳位
+        let roomsToDelete = appState.rooms.filter { selectedLocations.contains($0.id) }
+        for room in roomsToDelete {
+            appState.deleteRoom(room)
+        }
+        
+        // 再删除选中的收纳组（顺带清理孤立的组）
+        let groupsToDelete = appState.groups.filter { selectedGroups.contains($0.name) }
+        for group in groupsToDelete {
+            appState.deleteGroup(group)
+        }
+        
+        isSelectionMode = false
+        selectedLocations.removeAll()
+        selectedGroups.removeAll()
+    }
+
+    // MARK: - UI 组件
+
+    private func groupHeader(groupName: String) -> some View {
+        HStack {
+            if isSelectionMode {
+                Button {
+                    withAnimation { toggleGroupSelection(groupName) }
+                } label: {
+                    Image(systemName: selectedGroups.contains(groupName) ? "checkmark.circle.fill" : "circle")
+                        .foregroundColor(selectedGroups.contains(groupName) ? .blue : .secondary.opacity(0.5))
+                        .font(.title2)
+                }
+                .padding(.trailing, 4)
+                .transition(.move(edge: .leading).combined(with: .opacity))
+            }
+            
+            Image(systemName: "folder")
+                .foregroundStyle(.blue)
+            Text(groupName)
+                .font(.headline)
+                .foregroundStyle(.primary)
+            Text("\(groupedRooms[groupName]?.count ?? 0)个收纳位")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+            
+            // 添加折叠/展开指示图标
+            if !isSelectionMode {
+                Image(systemName: "chevron.right")
+                    .foregroundStyle(.secondary)
+                    .rotationEffect(.degrees(collapsedGroups.contains(groupName) ? 0 : 90))
+            }
+        }
+        .padding(.horizontal, 4)
+        .padding(.vertical, 8)
+        .contentShape(Rectangle()) // 确保整个区域可点击
+        .background(Color(.systemBackground))
+        .onTapGesture {
+            // 如果在编辑模式，点击 Header 整行等于点击前面勾选框
+            if isSelectionMode {
+                withAnimation { toggleGroupSelection(groupName) }
+            } else {
+                // 正常模式点击折叠
+                withAnimation(.easeInOut(duration: 0.25)) {
+                    if collapsedGroups.contains(groupName) {
+                        collapsedGroups.remove(groupName)
+                    } else {
+                        collapsedGroups.insert(groupName)
+                    }
+                }
+            }
         }
     }
 
@@ -96,22 +447,63 @@ struct ScanView: View {
                 Section("收纳位名称") {
                     TextField("例如：左侧第一层抽屉", text: $newRoomName)
                 }
+                Section("收纳组") {
+                    Picker("选择收纳组", selection: $selectedGroupName) {
+                        ForEach(appState.groups) { group in
+                            Text(group.name).tag(group.name)
+                        }
+                    }
+                }
             }
             .navigationTitle("新建收纳位")
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .cancellationAction) {
-                    Button("取消") { showCreateRoom = false }
+                    Button("取消") {
+                        showCreateRoom = false
+                        newRoomName = ""
+                    }
                 }
                 ToolbarItem(placement: .confirmationAction) {
                     Button("创建") {
-                        if !newRoomName.isEmpty {
-                            _ = appState.createRoom(name: newRoomName)
+                        if !newRoomName.isEmpty && !selectedGroupName.isEmpty {
+                            _ = appState.createRoom(name: newRoomName, groupName: selectedGroupName)
                             newRoomName = ""
                             showCreateRoom = false
                         }
                     }
-                    .disabled(newRoomName.isEmpty)
+                    .disabled(newRoomName.isEmpty || selectedGroupName.isEmpty)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private var createGroupView: some View {
+        NavigationView {
+            Form {
+                Section("收纳组名称") {
+                    TextField("例如：书房、主卧", text: $newGroupName)
+                }
+            }
+            .navigationTitle("新建收纳组")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") {
+                        showCreateGroup = false
+                        newGroupName = ""
+                    }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("创建") {
+                        if !newGroupName.isEmpty {
+                            _ = appState.createGroup(name: newGroupName)
+                            newGroupName = ""
+                            showCreateGroup = false
+                        }
+                    }
+                    .disabled(newGroupName.isEmpty)
                 }
             }
         }
@@ -122,73 +514,77 @@ struct ScanView: View {
 struct LocationCard: View {
     let location: StorageLocation
     let kleinBlue: Color
+    
+    // 计算距离创建过去的天数
+    private func daysAgoString(from date: Date) -> String {
+        let days = Calendar.current.dateComponents([.day], from: date, to: Date()).day ?? 0
+        if days == 0 {
+            return String(localized: "今天创建")
+        } else {
+            return String(localized: "创建于 \(days) 天前")
+        }
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 封面区域 - 固定宽高比，避免不同尺寸图片导致重叠
+            // 封面区域
             ZStack {
                 if let coverData = location.coverImageData, let uiImage = UIImage(data: coverData) {
-                    // 图片识别：显示压缩后的图片
                     Image(uiImage: uiImage)
                         .resizable()
                         .scaledToFill()
-                        .frame(height: 120)
+                        .frame(height: 100)
                         .clipped()
                 } else if location.inputType == .textInput {
-                    // 文字输入：显示克莱因蓝背景
                     Rectangle()
                         .fill(kleinBlue)
-                        .frame(height: 120)
+                        .frame(height: 100)
                         .overlay {
                             Image(systemName: "text.quote")
-                                .font(.system(size: 30))
+                                .font(.system(size: 32))
                                 .foregroundStyle(.white.opacity(0.8))
                         }
                 } else {
-                    // 默认：灰色背景
                     Rectangle()
                         .fill(Color(.systemGray5))
-                        .frame(height: 120)
+                        .frame(height: 100)
                         .overlay {
                             Image(systemName: "archivebox")
-                                .font(.system(size: 30))
+                                .font(.system(size: 32))
                                 .foregroundStyle(.secondary)
                         }
                 }
             }
-            .frame(maxWidth: .infinity)
             
             // 信息区域
             VStack(alignment: .leading, spacing: 4) {
                 Text(location.name)
-                    .font(.headline)
+                    .font(.subheadline)
+                    .fontWeight(.bold)
+                    .foregroundStyle(.primary)
                     .lineLimit(1)
                 
-                HStack {
-                    Text("\(location.items.count) 个物品")
-                        .font(.caption)
+                // 物品数量和时间组合在同一行
+                HStack(spacing: 4) {
+                    Text("\(location.items.count)个物品")
+                        .foregroundStyle(.blue)
+                    
+                    Text("·")
                         .foregroundStyle(.secondary)
-                    Spacer()
-                    if let anchor = location.anchorItemName {
-                        Text(anchor)
-                            .font(.caption2)
-                            .padding(.horizontal, 6)
-                            .padding(.vertical, 2)
-                            .background(Color.blue.opacity(0.1))
-                            .foregroundStyle(.blue)
-                            .cornerRadius(4)
-                    }
+                    
+                    Text(daysAgoString(from: location.createdAt))
+                        .foregroundStyle(.secondary)
                 }
-                
-                Text(location.updatedAt, style: .relative)
-                    .font(.caption2)
-                    .foregroundStyle(.tertiary)
+                .font(.system(size: 10))
+                .lineLimit(1)
             }
-            .padding(12)
+            .padding(.horizontal, 8)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(Color(.systemBackground))
         }
-        .background(Color(.systemBackground))
         .cornerRadius(12)
-        .shadow(color: .black.opacity(0.1), radius: 5, x: 0, y: 2)
+        .shadow(color: .black.opacity(0.1), radius: 4, x: 0, y: 2)
     }
 }
 
@@ -207,35 +603,27 @@ struct LocationDetailView: View {
         self._currentLocation = State(initialValue: location)
     }
     
-    // 克莱因蓝颜色
     private let kleinBlue = Color(red: 0.0, green: 0.18, blue: 0.65)
 
     var body: some View {
         NavigationView {
             ScrollView {
                 VStack(alignment: .leading, spacing: 20) {
-                    // 封面区域
                     coverSection
-                    
-                    // 前往识别按钮
                     goToDetectButton
                     
-                    // 基准物品
                     if let anchor = currentLocation.anchorItemName {
                         anchorSection(anchor: anchor)
                     }
                     
-                    // 幽默评价
                     if let comment = currentLocation.funnyComment, !comment.isEmpty {
                         funnyCommentSection(comment: comment)
                     }
                     
-                    // 收纳建议
                     if let advice = currentLocation.organizingAdvice, !advice.isEmpty {
                         organizingAdviceSection(advice: advice)
                     }
                     
-                    // 物品列表
                     itemsSection
                 }
                 .padding()
@@ -277,7 +665,6 @@ struct LocationDetailView: View {
     private var coverSection: some View {
         Group {
             if let coverData = currentLocation.coverImageData, let uiImage = UIImage(data: coverData) {
-                // 图片识别：显示压缩后的图片
                 Image(uiImage: uiImage)
                     .resizable()
                     .scaledToFill()
@@ -285,7 +672,6 @@ struct LocationDetailView: View {
                     .clipped()
                     .cornerRadius(16)
             } else if currentLocation.inputType == .textInput {
-                // 文字输入：显示克莱因蓝背景
                 Rectangle()
                     .fill(kleinBlue)
                     .frame(height: 200)
@@ -301,7 +687,6 @@ struct LocationDetailView: View {
                         }
                     }
             } else {
-                // 默认：灰色背景
                 Rectangle()
                     .fill(Color(.systemGray5))
                     .frame(height: 200)
@@ -360,7 +745,6 @@ struct LocationDetailView: View {
     }
 
     private func funnyCommentSection(comment: String) -> some View {
-        // 根据评价内容判断颜色
         let commentColor: Color = {
             if comment.contains("整齐") || comment.contains("模范") || comment.contains("赏心悦目") || comment.contains("完美") {
                 return .green
@@ -460,7 +844,7 @@ struct ItemRow: View {
                     .background(Color(.tertiarySystemBackground))
                     .cornerRadius(4)
                 
-                Text("\(Int(item.confidence * 100))%")
+                Text(Double(item.confidence), format: .percent.precision(.fractionLength(0)))
                     .font(.caption2)
                     .foregroundStyle(.secondary)
             }
@@ -471,7 +855,6 @@ struct ItemRow: View {
     }
 }
 
-// 保留原有的ImagePicker组件
 struct ImagePicker: UIViewControllerRepresentable {
     @Binding var image: UIImage?
     var sourceType: UIImagePickerController.SourceType
@@ -497,3 +880,4 @@ struct ImagePicker: UIViewControllerRepresentable {
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { picker.dismiss(animated: true) }
     }
 }
+

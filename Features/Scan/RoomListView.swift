@@ -4,6 +4,10 @@ struct RoomListView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
 
+    private var groupedRooms: [String: [StorageLocation]] {
+        Dictionary(grouping: appState.rooms, by: { $0.groupName })
+    }
+
     var body: some View {
         NavigationView {
             List {
@@ -16,24 +20,25 @@ struct RoomListView: View {
                     .frame(maxWidth: .infinity)
                     .padding(.vertical, 40)
                 } else {
-                    ForEach(appState.rooms) { room in
-                        HStack {
-                            Image(systemName: appState.currentRoom?.id == room.id ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(appState.currentRoom?.id == room.id ? .blue : .secondary)
-                            VStack(alignment: .leading) {
-                                Text(room.name).font(.headline)
-                                Text("\(room.items.count) 个物品 · \(room.updatedAt.formatted(date: .abbreviated, time: .omitted))")
-                                    .font(.caption).foregroundStyle(.secondary)
+                    ForEach(groupedRooms.keys.sorted(), id: \.self) { groupName in
+                        Section(groupName) {
+                            ForEach(groupedRooms[groupName] ?? []) { room in
+                                HStack {
+                                    Image(systemName: appState.currentRoom?.id == room.id ? "checkmark.circle.fill" : "circle")
+                                        .foregroundStyle(appState.currentRoom?.id == room.id ? .blue : .secondary)
+                                    VStack(alignment: .leading) {
+                                        Text(room.name).font(.headline)
+                                        Text("\(room.items.count) 个物品 · \(room.updatedAt.formatted(date: .abbreviated, time: .omitted))")
+                                            .font(.caption).foregroundStyle(.secondary)
+                                    }
+                                    Spacer()
+                                }
+                                .onTapGesture {
+                                    appState.currentRoom = room
+                                    dismiss()
+                                }
                             }
-                            Spacer()
                         }
-                        .onTapGesture {
-                            appState.currentRoom = room
-                            dismiss()
-                        }
-                    }
-                    .onDelete { idx in
-                        for i in idx { appState.deleteRoom(appState.rooms[i]) }
                     }
                 }
             }
@@ -41,7 +46,6 @@ struct RoomListView: View {
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
                 ToolbarItem(placement: .navigationBarLeading) { Button("关闭") { dismiss() } }
-                ToolbarItem(placement: .navigationBarTrailing) { EditButton() }
             }
         }
         .navigationViewStyle(.stack)

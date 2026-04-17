@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		780D7E342F902C4B00DD6B83 /* SearchIndexService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780D7E332F902C4B00DD6B83 /* SearchIndexService.swift */; };
+		782BD99D2F91FCB00012448F /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 782BD99C2F91FCB00012448F /* Localizable.xcstrings */; };
 		7863B7012F8E230700A726B6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7863B7002F8E230700A726B6 /* Assets.xcassets */; };
 		7863B7272F8E2D7F00A726B6 /* MapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7863B7162F8E2D7F00A726B6 /* MapView.swift */; };
 		7863B7282F8E2D7F00A726B6 /* StoreSenseApp.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7863B7102F8E2D7F00A726B6 /* StoreSenseApp.swift */; };
@@ -48,6 +49,7 @@
 
 /* Begin PBXFileReference section */
 		780D7E332F902C4B00DD6B83 /* SearchIndexService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchIndexService.swift; sourceTree = "<group>"; };
+		782BD99C2F91FCB00012448F /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		7863B7002F8E230700A726B6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7863B70E2F8E2D7F00A726B6 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
 		7863B70F2F8E2D7F00A726B6 /* ContentView.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = ContentView.swift; sourceTree = "<group>"; };
@@ -192,6 +194,7 @@
 		789688B52F8DC28C00CF8BA2 = {
 			isa = PBXGroup;
 			children = (
+				782BD99C2F91FCB00012448F /* Localizable.xcstrings */,
 				7863B7112F8E2D7F00A726B6 /* App */,
 				7863B71F2F8E2D7F00A726B6 /* Features */,
 				7863B7232F8E2D7F00A726B6 /* Models */,
@@ -330,6 +333,7 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				782BD99D2F91FCB00012448F /* Localizable.xcstrings in Resources */,
 				7863B7012F8E230700A726B6 /* Assets.xcassets in Resources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
@@ -467,6 +471,7 @@
 				ONLY_ACTIVE_ARCH = YES;
 				SDKROOT = iphoneos;
 				SWIFT_ACTIVE_COMPILATION_CONDITIONS = "DEBUG $(inherited)";
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				SWIFT_OPTIMIZATION_LEVEL = "-Onone";
 			};
 			name = Debug;
@@ -524,6 +529,7 @@
 				MTL_FAST_MATH = YES;
 				SDKROOT = iphoneos;
 				SWIFT_COMPILATION_MODE = wholemodule;
+				SWIFT_EMIT_LOC_STRINGS = YES;
 				VALIDATE_PRODUCT = YES;
 			};
 			name = Release;
