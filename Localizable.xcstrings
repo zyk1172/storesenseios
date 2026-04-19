@@ -621,6 +621,9 @@
         }
       }
     },
+    "定位物品 (拖动图标)" : {
+
+    },
     "导入失败：%@" : {
       "localizations" : {
         "en" : {
@@ -642,6 +645,7 @@
       }
     },
     "导入成功，已恢复 %lld 个收纳位！" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -650,6 +654,9 @@
           }
         }
       }
+    },
+    "导入成功，已恢复 %lld 个收纳位与模型配置！" : {
+
     },
     "导出备份到文件 / iCloud" : {
       "localizations" : {
@@ -794,6 +801,9 @@
         }
       }
     },
+    "手动添加" : {
+
+    },
     "手动输入" : {
       "localizations" : {
         "en" : {
@@ -855,7 +865,7 @@
       }
     },
     "按创建时间" : {
-      "extractionState" : "stale",
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -866,7 +876,7 @@
       }
     },
     "按名称" : {
-      "extractionState" : "stale",
+      "extractionState" : "manual",
       "localizations" : {
         "en" : {
           "stringUnit" : {
@@ -1172,6 +1182,9 @@
         }
       }
     },
+    "正在识别局部细节..." : {
+
+    },
     "正在识别物品..." : {
       "localizations" : {
         "en" : {
@@ -1181,6 +1194,9 @@
           }
         }
       }
+    },
+    "正在重建..." : {
+
     },
     "正在重新识别..." : {
       "localizations" : {
@@ -1211,6 +1227,9 @@
           }
         }
       }
+    },
+    "添加物品" : {
+
     },
     "清空搜索索引" : {
       "localizations" : {
@@ -1263,6 +1282,9 @@
         }
       }
     },
+    "物品信息" : {
+
+    },
     "物品名称" : {
       "localizations" : {
         "en" : {
@@ -1272,6 +1294,9 @@
           }
         }
       }
+    },
+    "物品名称 (必填)" : {
+
     },
     "物品清单" : {
       "localizations" : {
@@ -1292,6 +1317,12 @@
           }
         }
       }
+    },
+    "相对位置描述" : {
+
+    },
+    "确定" : {
+
     },
     "确定删除？" : {
       "localizations" : {
@@ -1340,6 +1371,12 @@
 
     },
     "空间参考" : {
+
+    },
+    "精细化局部识别" : {
+
+    },
+    "索引操作" : {
 
     },
     "统计" : {
@@ -1650,7 +1687,11 @@
         }
       }
     },
+    "通过系统文件管理器，你可以将数据和 AI 模型配置安全地备份到 iCloud、OneDrive 或本地设备中。" : {
+
+    },
     "通过系统文件管理器，你可以将数据安全地备份到 iCloud、OneDrive 或本地设备中。" : {
+      "extractionState" : "stale",
       "localizations" : {
         "en" : {
           "stringUnit" : {

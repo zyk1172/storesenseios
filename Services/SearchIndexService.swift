@@ -2,10 +2,10 @@ import Foundation
 import CoreSpotlight
 import MobileCoreServices
 import UIKit
+import NaturalLanguage
 
 // 导入StorageModels模块
 // 注意：StorageItem和StorageLocation在StorageModels.swift中定义
-// 这里假设它们在同一个模块中
 
 class SearchIndexService {
     static let shared = SearchIndexService()
@@ -13,8 +13,8 @@ class SearchIndexService {
     private let domainIdentifier = "zhengyk.StoreSense"
     private let userActivityType = "zhengyk.StoreSense.search"
     
-    // 为所有物品建立搜索索引
-    func indexAllItems() {
+    // 为所有物品建立搜索索引（新增 feedback 回调）
+    func indexAllItems(completion: ((Bool) -> Void)? = nil) {
         let storageService = ObjectStorageService()
         let rooms = storageService.fetchAllRooms()
         
@@ -33,11 +33,18 @@ class SearchIndexService {
                 print("删除搜索索引失败: \(error)")
             }
             
+            if searchableItems.isEmpty {
+                completion?(true)
+                return
+            }
+            
             CSSearchableIndex.default().indexSearchableItems(searchableItems) { error in
                 if let error = error {
                     print("索引物品失败: \(error)")
+                    completion?(false)
                 } else {
                     print("成功索引 \(searchableItems.count) 个物品")
+                    completion?(true)
                 }
             }
         }
@@ -85,14 +92,69 @@ class SearchIndexService {
     }
     
     // 清空所有索引
-    func clearAllIndexes() {
-        CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [domainIdentifier]) { error in
-            if let error = error {
-                print("清空索引失败: \(error)")
-            } else {
-                print("已清空所有搜索索引")
+    func clearAllIndexes(completion: ((Bool) -> Void)? = nil) {
+        // 【关键修复2】：连同旧的、错误的 Siri 建议（固定显示的空详情幽灵物品）一起全部抹除！
+        NSUserActivity.deleteAllSavedUserActivities {
+            CSSearchableIndex.default().deleteSearchableItems(withDomainIdentifiers: [self.domainIdentifier]) { error in
+                if let error = error {
+                    print("清空索引失败: \(error)")
+                    completion?(false)
+                } else {
+                    print("已清空所有搜索索引")
+                    completion?(true)
+                }
             }
         }
+    }
+    
+    // MARK: - 核心修复：全子串拆分法（N-Gram）
+    
+    /// 获取物品名称的【所有连续组合】，彻底解决任何字数匹配问题
+    private func getAllSubstrings(for text: String) -> [String] {
+        var tokens = Set<String>()
+        let cleanText = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        tokens.insert(cleanText)
+        
+        // 生成所有可能的连续子串 (长度 1 到 N)
+        // 比如 "显示器" -> "显", "示", "器", "显示", "示器", "显示器"
+        if cleanText.count <= 30 {
+            let chars = Array(cleanText)
+            for i in 0..<chars.count {
+                for j in i..<chars.count {
+                    let sub = String(chars[i...j])
+                    if !sub.isEmpty {
+                        tokens.insert(sub)
+                    }
+                }
+            }
+        } else {
+            // 如果名字异常长，回退到自然语言分词，防止内存爆炸
+            let tokenizer = NLTokenizer(unit: .word)
+            tokenizer.string = cleanText
+            tokenizer.enumerateTokens(in: cleanText.startIndex..<cleanText.endIndex) { range, _ in
+                tokens.insert(String(cleanText[range]))
+                return true
+            }
+        }
+        return Array(tokens)
+    }
+    
+    /// 对分类、位置、描述进行分词，作为次级搜索“关键字”
+    private func getKeywords(for item: StorageItem, in room: StorageLocation) -> [String] {
+        var keywords = Set<String>()
+        keywords.insert(item.category)
+        keywords.insert(room.name)
+        
+        if !item.description.isEmpty {
+            let tokenizer = NLTokenizer(unit: .word)
+            tokenizer.string = item.description
+            tokenizer.enumerateTokens(in: item.description.startIndex..<item.description.endIndex) { range, _ in
+                let word = String(item.description[range])
+                if word.count > 1 { keywords.insert(word) }
+                return true
+            }
+        }
+        return Array(keywords)
     }
     
     // 创建可搜索的物品
@@ -110,12 +172,14 @@ class SearchIndexService {
         }
         attributeSet.textContent = fullDescription
         
-        // 关键词 - 用于搜索
-        var keywords = [item.name, item.category, room.name]
-        if !item.description.isEmpty {
-            keywords.append(item.description)
-        }
-        attributeSet.keywords = keywords
+        // 【关键修复1】：将名字拆解出的所有可能子串放入 AlternateNames，打破 4 个字的字数限制
+        let nameTokens = getAllSubstrings(for: item.name)
+        attributeSet.alternateNames = nameTokens
+        
+        // 混合其他关键字
+        var allKeywords = Set(nameTokens)
+        getKeywords(for: item, in: room).forEach { allKeywords.insert($0) }
+        attributeSet.keywords = Array(allKeywords)
         
         // 添加缩略图（如果有）
         if let coverData = room.coverImageData,
@@ -129,13 +193,13 @@ class SearchIndexService {
         
         // 创建可搜索项目
         let identifier = "\(domainIdentifier).\(item.id.uuidString)"
-        let item = CSSearchableItem(
+        let searchableItem = CSSearchableItem(
             uniqueIdentifier: identifier,
             domainIdentifier: domainIdentifier,
             attributeSet: attributeSet
         )
         
-        return item
+        return searchableItem
     }
     
     // 创建NSUserActivity用于Siri和Spotlight搜索
@@ -143,7 +207,8 @@ class SearchIndexService {
         let activity = NSUserActivity(activityType: userActivityType)
         
         activity.title = item.name
-        activity.isEligibleForSearch = true
+        // 关闭冗余搜索通道，只保留预测，避免与上面 CoreSpotlight 发生冲突
+        activity.isEligibleForSearch = false
         activity.isEligibleForPrediction = true
         activity.isEligibleForPublicIndexing = false
         
@@ -155,20 +220,14 @@ class SearchIndexService {
         attributeSet.title = item.name
         attributeSet.contentDescription = "在「\(room.name)」的\(item.relativeLocation)"
         
-        var fullDescription = "位置：\(room.name)\n相对位置：\(item.relativeLocation)\n分类：\(item.category)"
-        if !item.description.isEmpty {
-            fullDescription += "\n描述：\(item.description)"
-        }
-        attributeSet.textContent = fullDescription
+        // 同样应用所有子串
+        let nameTokens = getAllSubstrings(for: item.name)
+        attributeSet.alternateNames = nameTokens
         
-        // 添加关键词
-        var keywords = [item.name, item.category, room.name]
-        if !item.description.isEmpty {
-            keywords.append(item.description)
-        }
-        attributeSet.keywords = keywords
+        var allKeywords = Set(nameTokens)
+        getKeywords(for: item, in: room).forEach { allKeywords.insert($0) }
+        attributeSet.keywords = Array(allKeywords)
         
-        // 添加缩略图
         if let coverData = room.coverImageData,
            let thumbnail = UIImage(data: coverData)?.resize(to: CGSize(width: 100, height: 100)) {
             attributeSet.thumbnailData = thumbnail.jpegData(compressionQuality: 0.8)
@@ -181,8 +240,9 @@ class SearchIndexService {
     
     // 为物品创建并激活NSUserActivity
     func activateUserActivity(for item: StorageItem, in room: StorageLocation) {
-        let activity = createUserActivity(for: item, in: room)
-        activity.becomeCurrent()
+        // 【关键修复2】：这里不再调用 activity.becomeCurrent() ！！！
+        // 之前的代码每次保存时在后台静默激活这个，导致系统以为你在高频查看这个物品，
+        // 从而将其变成“幽灵推荐”固定在搜索里。现在直接废弃该行为，杜绝污染。
     }
 }
 

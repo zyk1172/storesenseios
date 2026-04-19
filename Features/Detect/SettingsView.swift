@@ -1,10 +1,48 @@
 import SwiftUI
 import UniformTypeIdentifiers
 
-// 通过 @unchecked Sendable 告诉 Swift 6 这只是单纯的数据载体，不受 Actor 约束
-struct BackupData: Codable, @unchecked Sendable {
+// 显式实现 Codable 并标记为 nonisolated，消除 Swift 6 并发警告
+// 新增 apiKey、baseURL、model 的备份支持
+struct BackupData: Codable, Sendable {
     let rooms: [StorageLocation]
     let groups: [StorageGroup]
+    let apiKey: String?
+    let baseURL: String?
+    let model: String?
+    
+    enum CodingKeys: String, CodingKey {
+        case rooms
+        case groups
+        case apiKey
+        case baseURL
+        case model
+    }
+    
+    nonisolated init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        self.rooms = try container.decode([StorageLocation].self, forKey: .rooms)
+        self.groups = try container.decode([StorageGroup].self, forKey: .groups)
+        self.apiKey = try container.decodeIfPresent(String.self, forKey: .apiKey)
+        self.baseURL = try container.decodeIfPresent(String.self, forKey: .baseURL)
+        self.model = try container.decodeIfPresent(String.self, forKey: .model)
+    }
+    
+    nonisolated func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(rooms, forKey: .rooms)
+        try container.encode(groups, forKey: .groups)
+        try container.encodeIfPresent(apiKey, forKey: .apiKey)
+        try container.encodeIfPresent(baseURL, forKey: .baseURL)
+        try container.encodeIfPresent(model, forKey: .model)
+    }
+    
+    init(rooms: [StorageLocation], groups: [StorageGroup], apiKey: String?, baseURL: String?, model: String?) {
+        self.rooms = rooms
+        self.groups = groups
+        self.apiKey = apiKey
+        self.baseURL = baseURL
+        self.model = model
+    }
 }
 
 struct BackupDocument: FileDocument {
@@ -20,7 +58,6 @@ struct BackupDocument: FileDocument {
             throw CocoaError(.fileReadCorruptFile)
         }
         
-        // 在 Swift 6 的非隔离上下文中，通过 assumeIsolated 或者创建一个非隔离的解码器
         let decoder = JSONDecoder()
         self.data = try decoder.decode(BackupData.self, from: fileData)
     }
@@ -46,6 +83,11 @@ struct SettingsView: View {
     @State private var isImporting = false
     @State private var exportDoc: BackupDocument?
     @State private var backupMessage: String?
+    
+    // 索引操作反馈状态
+    @State private var isRebuildingIndex = false
+    @State private var showIndexAlert = false
+    @State private var indexAlertMessage = ""
 
     @EnvironmentObject var appState: AppState
 
@@ -181,7 +223,14 @@ struct SettingsView: View {
             // 数据备份与恢复
             Section {
                 Button("导出备份到文件 / iCloud") {
-                    exportDoc = BackupDocument(data: BackupData(rooms: appState.rooms, groups: appState.groups))
+                    let backupData = BackupData(
+                        rooms: appState.rooms,
+                        groups: appState.groups,
+                        apiKey: apiKey,
+                        baseURL: baseURL,
+                        model: model
+                    )
+                    exportDoc = BackupDocument(data: backupData)
                     isExporting = true
                 }
                 
@@ -191,7 +240,7 @@ struct SettingsView: View {
             } header: {
                 Text("数据备份与恢复")
             } footer: {
-                Text(backupMessage ?? String(localized: "通过系统文件管理器，你可以将数据安全地备份到 iCloud、OneDrive 或本地设备中。"))
+                Text(backupMessage ?? String(localized: "通过系统文件管理器，你可以将数据和 AI 模型配置安全地备份到 iCloud、OneDrive 或本地设备中。"))
                     .foregroundColor(backupMessage != nil ? .blue : .secondary)
             }
             .fileExporter(isPresented: $isExporting, document: exportDoc, contentType: .json, defaultFilename: "StoreSenseBackup") { result in
@@ -211,14 +260,25 @@ struct SettingsView: View {
                         defer { url.stopAccessingSecurityScopedResource() }
                         let data = try Data(contentsOf: url)
                         let backup = try JSONDecoder().decode(BackupData.self, from: data)
-                        // 将导入的数据合并/覆盖保存到本地存储
+                        
+                        // 恢复本地存储的物品和组
                         let storage = ObjectStorageService()
                         backup.groups.forEach { storage.saveGroup($0) }
                         backup.rooms.forEach { storage.saveRoom($0) }
                         appState.loadGroups()
                         appState.loadRooms()
+                        
+                        // 恢复大模型配置（若存在）
+                        if let importedApiKey = backup.apiKey { apiKey = importedApiKey }
+                        if let importedBaseURL = backup.baseURL { baseURL = importedBaseURL }
+                        if let importedModel = backup.model { model = importedModel }
+                        
                         let count = backup.rooms.count
-                        backupMessage = String(localized: "导入成功，已恢复 \(count) 个收纳位！")
+                        backupMessage = String(localized: "导入成功，已恢复 \(count) 个收纳位与模型配置！")
+                        
+                        // 自动重建一次索引
+                        rebuildSearchIndex()
+                        
                     } catch {
                         backupMessage = String(localized: "导入失败：格式不正确或读取失败")
                     }
@@ -234,11 +294,17 @@ struct SettingsView: View {
                 } label: {
                     HStack {
                         Spacer()
-                        Text("重建搜索索引")
+                        if isRebuildingIndex {
+                            ProgressView()
+                                .progressViewStyle(CircularProgressViewStyle())
+                                .padding(.trailing, 8)
+                        }
+                        Text(isRebuildingIndex ? "正在重建..." : "重建搜索索引")
                             .fontWeight(.medium)
                         Spacer()
                     }
                 }
+                .disabled(isRebuildingIndex)
                 
                 Button(role: .destructive) {
                     clearSearchIndex()
@@ -249,6 +315,7 @@ struct SettingsView: View {
                         Spacer()
                     }
                 }
+                .disabled(isRebuildingIndex)
             } header: {
                 Text("搜索索引")
             } footer: {
@@ -256,14 +323,32 @@ struct SettingsView: View {
             }
         }
         .navigationTitle("设置")
+        .alert("索引操作", isPresented: $showIndexAlert) {
+            Button("确定", role: .cancel) {}
+        } message: {
+            Text(indexAlertMessage)
+        }
     }
     
     private func rebuildSearchIndex() {
-        appState.rebuildSearchIndex()
+        isRebuildingIndex = true
+        // 绕过 AppState，直接通过单例执行并接收回调更新 UI
+        SearchIndexService.shared.indexAllItems { success in
+            DispatchQueue.main.async {
+                self.isRebuildingIndex = false
+                self.indexAlertMessage = success ? "重建搜索索引成功！\n现在可以通过 Siri 和 Spotlight 搜索你的物品了。" : "重建搜索索引失败，请稍后重试。"
+                self.showIndexAlert = true
+            }
+        }
     }
     
     private func clearSearchIndex() {
-        appState.clearSearchIndex()
+        SearchIndexService.shared.clearAllIndexes { success in
+            DispatchQueue.main.async {
+                self.indexAlertMessage = success ? "已成功清空所有搜索索引。" : "清空搜索索引失败。"
+                self.showIndexAlert = true
+            }
+        }
     }
 
     private func testAPIConnection() async {

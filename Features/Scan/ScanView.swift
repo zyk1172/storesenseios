@@ -596,6 +596,7 @@ struct LocationDetailView: View {
     @Binding var selectedTab: ContentView.Tab
     @State private var currentLocation: StorageLocation
     @State private var showDeleteConfirm = false
+    @State private var showManualAdd = false
 
     init(location: StorageLocation, selectedTab: Binding<ContentView.Tab>) {
         self.initialLocation = location
@@ -657,6 +658,11 @@ struct LocationDetailView: View {
                     onItemChanged: { _ in refreshLocation() },
                     onItemDeleted: { refreshLocation() }
                 )
+            }
+            .sheet(isPresented: $showManualAdd) {
+                ManualAddItemView(location: currentLocation) {
+                    refreshLocation()
+                }
             }
         }
         .navigationViewStyle(.stack)
@@ -782,8 +788,21 @@ struct LocationDetailView: View {
 
     private var itemsSection: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("物品清单")
-                .font(.headline)
+            HStack {
+                Text("物品清单")
+                    .font(.headline)
+                Spacer()
+                Button {
+                    showManualAdd = true
+                } label: {
+                    Label("手动添加", systemImage: "plus")
+                        .font(.subheadline)
+                        .padding(.horizontal, 10)
+                        .padding(.vertical, 6)
+                        .background(Color.blue.opacity(0.1))
+                        .cornerRadius(8)
+                }
+            }
             
             if currentLocation.items.isEmpty {
                 Text("还没有物品，去识别标签添加吧！")
@@ -878,6 +897,215 @@ struct ImagePicker: UIViewControllerRepresentable {
             picker.dismiss(animated: true)
         }
         func imagePickerControllerDidCancel(_ picker: UIImagePickerController) { picker.dismiss(animated: true) }
+    }
+}
+
+// MARK: - 新增功能：手动添加物品与坐标映射
+struct ManualAddItemView: View {
+    @Environment(\.dismiss) private var dismiss
+    var location: StorageLocation
+    var onSaved: () -> Void
+    
+    @State private var coordX: Float = 500
+    @State private var coordY: Float = 500
+    @State private var name: String = ""
+    @State private var category: String = ""
+    @State private var relativeLocation: String = ""
+    @State private var description: String = ""
+    
+    @State private var isRecognizing: Bool = false
+    @AppStorage("openai_api_key") private var apiKey = ""
+    @AppStorage("openai_base_url") private var baseURL = "https://api.openai.com/v1"
+    @AppStorage("openai_model") private var model = "gpt-4o"
+    
+    var background: UIImage? {
+        if let data = location.backgroundImageData ?? location.coverImageData {
+            return UIImage(data: data)
+        }
+        return nil
+    }
+    
+    var body: some View {
+        NavigationView {
+            Form {
+                if let bg = background {
+                    Section(header: Text("定位物品 (拖动图标)")) {
+                        InteractiveImageView(image: bg, coordX: $coordX, coordY: $coordY)
+                            .frame(height: 300)
+                            .listRowInsets(EdgeInsets())
+                        
+                        Button {
+                            Task { await recognizeRegion() }
+                        } label: {
+                            HStack {
+                                Spacer()
+                                if isRecognizing {
+                                    ProgressView().padding(.trailing, 8)
+                                } else {
+                                    Image(systemName: "sparkles")
+                                }
+                                Text(isRecognizing ? "正在识别局部细节..." : "精细化局部识别")
+                                Spacer()
+                            }
+                        }
+                        .disabled(isRecognizing || apiKey.isEmpty)
+                    }
+                }
+                
+                Section(header: Text("物品信息")) {
+                    TextField("物品名称 (必填)", text: $name)
+                    TextField("分类", text: $category)
+                    TextField("相对位置描述", text: $relativeLocation)
+                    TextField("详细描述", text: $description)
+                }
+            }
+            .navigationTitle("添加物品")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { saveItem() }
+                        .disabled(name.isEmpty || isRecognizing)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+    
+    private func saveItem() {
+        var updatedLocation = location
+        let newItem = StorageItem(
+            name: name,
+            category: category.isEmpty ? "未分类" : category,
+            relativeLocation: relativeLocation,
+            description: description,
+            confidence: 1.0,
+            coordX: background != nil ? coordX : nil,
+            coordY: background != nil ? coordY : nil
+        )
+        updatedLocation.items.append(newItem)
+        updatedLocation.updatedAt = Date()
+        
+        let storageService = ObjectStorageService()
+        // 保存后，原有逻辑自动重建该物品在系统全局与 Search Index 里的索引
+        storageService.saveRoom(updatedLocation)
+        
+        onSaved()
+        dismiss()
+    }
+    
+    private func recognizeRegion() async {
+        guard let uiImage = background else { return }
+        isRecognizing = true
+        
+        // 截取点击区域附近 40% 的图片，提供给 AI 进行更专注的识别
+        let cropWidth = uiImage.size.width * 0.4
+        let cropHeight = uiImage.size.height * 0.4
+        let centerX = uiImage.size.width * CGFloat(coordX) / 1000.0
+        let centerY = uiImage.size.height * CGFloat(coordY) / 1000.0
+        
+        let minX = max(0, centerX - cropWidth / 2)
+        let minY = max(0, centerY - cropHeight / 2)
+        let maxX = min(uiImage.size.width, centerX + cropWidth / 2)
+        let maxY = min(uiImage.size.height, centerY + cropHeight / 2)
+        
+        let rect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
+        
+        // 兼容图片方向的正确裁剪
+        let format = UIGraphicsImageRendererFormat()
+        format.scale = uiImage.scale
+        let renderer = UIGraphicsImageRenderer(size: rect.size, format: format)
+        let croppedImage = renderer.image { _ in
+            uiImage.draw(at: CGPoint(x: -rect.origin.x, y: -rect.origin.y))
+        }
+        
+        guard let data = croppedImage.jpegData(compressionQuality: 0.8) else {
+            isRecognizing = false
+            return
+        }
+        
+        do {
+            let result = try await AIRecognitionService(apiKey: apiKey, baseURL: baseURL, model: model).recognizeObject(imageData: data)
+            if let firstItem = result.items.first {
+                name = firstItem.name
+                if !firstItem.category.isEmpty { category = firstItem.category }
+                if !firstItem.relativeLocation.isEmpty { relativeLocation = firstItem.relativeLocation }
+                if !firstItem.description.isEmpty { description = firstItem.description }
+            }
+        } catch {
+            print("局部识别失败: \(error)")
+        }
+        
+        isRecognizing = false
+    }
+}
+
+// 支持拖拽定位并计算千分比坐标的图片视图
+struct InteractiveImageView: View {
+    let image: UIImage
+    @Binding var coordX: Float
+    @Binding var coordY: Float
+
+    var body: some View {
+        GeometryReader { geo in
+            let imageSize = image.size
+            let viewSize = geo.size
+            
+            // 计算渲染比例
+            let imageRatio = imageSize.width > 0 && imageSize.height > 0 ? imageSize.width / imageSize.height : 1
+            let viewRatio = viewSize.width > 0 && viewSize.height > 0 ? viewSize.width / viewSize.height : 1
+            
+            let renderWidth: CGFloat
+            let renderHeight: CGFloat
+            if imageRatio > viewRatio {
+                renderWidth = viewSize.width
+                renderHeight = viewSize.width / imageRatio
+            } else {
+                renderHeight = viewSize.height
+                renderWidth = viewSize.height * imageRatio
+            }
+            
+            let offsetX = (viewSize.width - renderWidth) / 2
+            let offsetY = (viewSize.height - renderHeight) / 2
+            
+            let currentPinX = offsetX + renderWidth * CGFloat(coordX) / 1000.0
+            let currentPinY = offsetY + renderHeight * CGFloat(coordY) / 1000.0
+
+            // ⚠️ 就是这里加了 return，指明这段代码执行后返回这个 ZStack 视图
+            return ZStack(alignment: .topLeading) {
+                Color.clear 
+                
+                Image(uiImage: image)
+                    .resizable()
+                    .scaledToFit()
+                    .frame(width: viewSize.width, height: viewSize.height)
+                
+                // 拖拽光标
+                Image(systemName: "mappin.circle.fill")
+                    .font(.system(size: 32))
+                    .foregroundColor(.red)
+                    .background(Circle().fill(Color.white).frame(width: 14, height: 14))
+                    .shadow(radius: 4)
+                    .position(x: currentPinX, y: currentPinY)
+                    .gesture(
+                        DragGesture()
+                            .onChanged { val in
+                                let localX = val.location.x - offsetX
+                                let localY = val.location.y - offsetY
+                                
+                                // 限制拖动范围在图片内部
+                                let clampedX = max(0, min(localX, renderWidth))
+                                let clampedY = max(0, min(localY, renderHeight))
+                                
+                                coordX = Float((clampedX / renderWidth) * 1000.0)
+                                coordY = Float((clampedY / renderHeight) * 1000.0)
+                            }
+                    )
+            }
+        }
+        .clipped()
     }
 }
 
