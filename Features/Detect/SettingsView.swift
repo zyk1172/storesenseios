@@ -2,11 +2,13 @@ import SwiftUI
 import UniformTypeIdentifiers
 
 // 显式实现 Codable 并标记为 nonisolated，消除 Swift 6 并发警告
-// 新增 apiKey、baseURL、model 的备份支持
 struct BackupData: Codable, Sendable {
     let rooms: [StorageLocation]
     let groups: [StorageGroup]
+    
+    // 这里存储的是 AES-GCM 加密后的密文，不再是明文了！
     let apiKey: String?
+    
     let baseURL: String?
     let model: String?
     
@@ -31,6 +33,7 @@ struct BackupData: Codable, Sendable {
         var container = encoder.container(keyedBy: CodingKeys.self)
         try container.encode(rooms, forKey: .rooms)
         try container.encode(groups, forKey: .groups)
+        // 允许导出，因为已经在外部加密了
         try container.encodeIfPresent(apiKey, forKey: .apiKey)
         try container.encodeIfPresent(baseURL, forKey: .baseURL)
         try container.encodeIfPresent(model, forKey: .model)
@@ -71,7 +74,9 @@ struct BackupDocument: FileDocument {
 }
 
 struct SettingsView: View {
-    @AppStorage("openai_api_key") private var apiKey = ""
+    // 使用 State 绑定，底层数据由 Keychain 托管
+    @State private var apiKey = ""
+    
     @AppStorage("openai_base_url") private var baseURL = "https://api.openai.com/v1"
     @AppStorage("openai_model") private var model = "gpt-4o"
     @State private var showKey = false
@@ -130,6 +135,8 @@ struct SettingsView: View {
                 .padding(.vertical, 4)
             } header: {
                 Text("API 配置")
+            } footer: {
+                Text("API Key 已安全地加密存储在您的设备钥匙串（Keychain）中。")
             }
 
             Section {
@@ -217,16 +224,19 @@ struct SettingsView: View {
             } header: {
                 Text("连接测试")
             } footer: {
-                Text("使用当前配置的 API Key、Base URL 和模型发送测试请求。")
+                Text("使用当前配置的 API Key、Base URL 和模型发送测试请求。请仅使用您信任的 API 服务地址，以保护您的密钥和照片隐私。")
             }
             
             // 数据备份与恢复
             Section {
                 Button("导出备份到文件 / iCloud") {
+                    // 🛡️ 本地 AES 加密 API Key，然后再写入 BackupData 结构体
+                    let encryptedKey = CryptoHelper.encrypt(apiKey)
+                    
                     let backupData = BackupData(
                         rooms: appState.rooms,
                         groups: appState.groups,
-                        apiKey: apiKey,
+                        apiKey: encryptedKey,
                         baseURL: baseURL,
                         model: model
                     )
@@ -240,7 +250,7 @@ struct SettingsView: View {
             } header: {
                 Text("数据备份与恢复")
             } footer: {
-                Text(backupMessage ?? String(localized: "通过系统文件管理器，你可以将数据和 AI 模型配置安全地备份到 iCloud、OneDrive 或本地设备中。"))
+                Text(backupMessage ?? String(localized: "通过系统文件管理器，您可以将数据安全备份到 iCloud 等云盘中。出于隐私保护，API Key 在备份文件中将经过强加密处理。"))
                     .foregroundColor(backupMessage != nil ? .blue : .secondary)
             }
             .fileExporter(isPresented: $isExporting, document: exportDoc, contentType: .json, defaultFilename: "StoreSenseBackup") { result in
@@ -261,7 +271,7 @@ struct SettingsView: View {
                         let data = try Data(contentsOf: url)
                         let backup = try JSONDecoder().decode(BackupData.self, from: data)
                         
-                        // 恢复本地存储的物品和组
+                        // 恢复本地存储的物品和空间
                         let storage = ObjectStorageService()
                         backup.groups.forEach { storage.saveGroup($0) }
                         backup.rooms.forEach { storage.saveRoom($0) }
@@ -269,7 +279,12 @@ struct SettingsView: View {
                         appState.loadRooms()
                         
                         // 恢复大模型配置（若存在）
-                        if let importedApiKey = backup.apiKey { apiKey = importedApiKey }
+                        if let importedEncryptedKey = backup.apiKey {
+                            // 🔓 本地 AES 解密
+                            let decryptedKey = CryptoHelper.decrypt(importedEncryptedKey) ?? importedEncryptedKey
+                            apiKey = decryptedKey
+                            KeychainManager.shared.saveKey(decryptedKey) // 同步回 Keychain
+                        }
                         if let importedBaseURL = backup.baseURL { baseURL = importedBaseURL }
                         if let importedModel = backup.model { model = importedModel }
                         
@@ -321,8 +336,27 @@ struct SettingsView: View {
             } footer: {
                 Text("重建索引可解决Siri和Spotlight搜索不到物品的问题。清空索引会移除所有Siri搜索建议。")
             }
+            
+            // 新增版权声明
+            VStack {
+                Text("郑云凯 769440615@qq.com 版权所有，侵权必究©️")
+                    .font(.caption2)
+                    .foregroundStyle(.secondary)
+                    .multilineTextAlignment(.center)
+                    .padding(.vertical, 8)
+            }
+            .frame(maxWidth: .infinity, alignment: .center)
+            .listRowBackground(Color.clear)
         }
         .navigationTitle("设置")
+        // 初始化时从 Keychain 读入
+        .onAppear {
+            self.apiKey = KeychainManager.shared.loadKey()
+        }
+        // 当用户在文本框修改了 apiKey 时，自动加密存入 Keychain
+        .onChange(of: apiKey) { newValue in
+            KeychainManager.shared.saveKey(newValue)
+        }
         .alert("索引操作", isPresented: $showIndexAlert) {
             Button("确定", role: .cancel) {}
         } message: {

@@ -6,7 +6,7 @@ class AppState: ObservableObject {
     @Published var currentRoom: StorageLocation?
     /// 所有已保存的收纳位列表
     @Published var rooms: [StorageLocation] = []
-    /// 所有收纳组
+    /// 所有空间
     @Published var groups: [StorageGroup] = []
 
     /// UI 状态控制
@@ -62,7 +62,7 @@ class AppState: ObservableObject {
     }
 
     func deleteGroup(_ group: StorageGroup) {
-        // 将该组下的收纳位移到默认组
+        // 将该空间下的收纳位移到默认空间
         for room in rooms where room.groupName == group.name {
             var movedRoom = room
             movedRoom.groupName = "默认"
@@ -75,7 +75,7 @@ class AppState: ObservableObject {
 
     func renameGroup(_ group: StorageGroup, newName: String) {
         let oldName = group.name
-        // 更新该组下所有收纳位的组名
+        // 更新该空间下所有收纳位的空间名
         for room in rooms where room.groupName == oldName {
             var movedRoom = room
             movedRoom.groupName = newName

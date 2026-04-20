@@ -16,7 +16,7 @@ struct DetectView: View {
     @State private var showPhotoPicker = false
     @State private var showTutorial = false
 
-    @AppStorage("openai_api_key") private var apiKey = ""
+    @State private var apiKey = ""
     @AppStorage("openai_base_url") private var baseURL = "https://api.openai.com/v1"
     @AppStorage("openai_model") private var model = "gpt-4o"
 
@@ -90,6 +90,9 @@ struct DetectView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .onAppear {
+            self.apiKey = KeychainManager.shared.loadKey()
+        }
     }
 
     // MARK: - Subviews
@@ -341,7 +344,7 @@ struct DetectionResultCard: View {
             
             if let anchor = result.anchorObject {
                 HStack {
-                    Text("基准物品").bold().frame(width: 80)
+                    Text("参照物").bold().frame(width: 80)
                     Text(anchor).foregroundStyle(.blue)
                 }
                 .font(.subheadline)
@@ -550,8 +553,8 @@ struct TutorialView: View {
                         TutorialFeatureRow(
                             icon: "folder.badge.plus",
                             color: .blue,
-                            title: "建立收纳体系",
-                            description: "在「收纳位」标签中，必须先建立收纳组（如书房、主卧），然后再在其中创建专属的收纳位。"
+                            title: "建立收纳空间",
+                            description: "在「收纳位」标签中，必须先建立空间（如书房、主卧），然后再在其中创建专属的收纳位。"
                         )
                         TutorialFeatureRow(
                             icon: "camera.viewfinder",
@@ -570,6 +573,13 @@ struct TutorialView: View {
                             color: .orange,
                             title: "配置 API Key",
                             description: "在使用智能功能前，请确保在右上角设置图标中配置好支持视觉与对话大模型的 API Key。"
+                        )
+                        // 新增的隐私提示
+                        TutorialFeatureRow(
+                            icon: "lock.shield.fill",
+                            color: .red,
+                            title: "隐私安全提示",
+                            description: "为保护您的隐私，请在拍照或选图前，确保照片中没有包含身份证、银行卡等敏感个人信息。图片只会被发送到您配置的 AI 模型提供商进行分析。"
                         )
                     }
                     .padding(.horizontal, 24)

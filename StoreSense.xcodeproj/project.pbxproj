@@ -8,6 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		780D7E342F902C4B00DD6B83 /* SearchIndexService.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780D7E332F902C4B00DD6B83 /* SearchIndexService.swift */; };
+		782477742F96D81500F956E5 /* SecurityHelpers.swift in Sources */ = {isa = PBXBuildFile; fileRef = 782477732F96D80F00F956E5 /* SecurityHelpers.swift */; };
 		782BD99D2F91FCB00012448F /* Localizable.xcstrings in Resources */ = {isa = PBXBuildFile; fileRef = 782BD99C2F91FCB00012448F /* Localizable.xcstrings */; };
 		7863B7012F8E230700A726B6 /* Assets.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 7863B7002F8E230700A726B6 /* Assets.xcassets */; };
 		7863B7272F8E2D7F00A726B6 /* MapView.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7863B7162F8E2D7F00A726B6 /* MapView.swift */; };
@@ -49,6 +50,7 @@
 
 /* Begin PBXFileReference section */
 		780D7E332F902C4B00DD6B83 /* SearchIndexService.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SearchIndexService.swift; sourceTree = "<group>"; };
+		782477732F96D80F00F956E5 /* SecurityHelpers.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = SecurityHelpers.swift; sourceTree = "<group>"; };
 		782BD99C2F91FCB00012448F /* Localizable.xcstrings */ = {isa = PBXFileReference; lastKnownFileType = text.json.xcstrings; path = Localizable.xcstrings; sourceTree = "<group>"; };
 		7863B7002F8E230700A726B6 /* Assets.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = Assets.xcassets; sourceTree = "<group>"; };
 		7863B70E2F8E2D7F00A726B6 /* AppState.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = AppState.swift; sourceTree = "<group>"; };
@@ -183,6 +185,7 @@
 		7863B7262F8E2D7F00A726B6 /* Services */ = {
 			isa = PBXGroup;
 			children = (
+				782477732F96D80F00F956E5 /* SecurityHelpers.swift */,
 				780D7E332F902C4B00DD6B83 /* SearchIndexService.swift */,
 				7863B7242F8E2D7F00A726B6 /* AIRecognitionService.swift */,
 				7863B7252F8E2D7F00A726B6 /* ObjectStorageService.swift */,
@@ -359,6 +362,7 @@
 			isa = PBXSourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
+				782477742F96D81500F956E5 /* SecurityHelpers.swift in Sources */,
 				7863B7272F8E2D7F00A726B6 /* MapView.swift in Sources */,
 				7863B7282F8E2D7F00A726B6 /* StoreSenseApp.swift in Sources */,
 				7863B7292F8E2D7F00A726B6 /* DetectionConfirmView.swift in Sources */,
@@ -541,7 +545,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 9YDRG67262;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -562,7 +566,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = zhengyk.StoreSense;
 				PRODUCT_NAME = StoreSense;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -583,7 +587,7 @@
 				ASSETCATALOG_COMPILER_GLOBAL_ACCENT_COLOR_NAME = AccentColor;
 				ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS = YES;
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 9YDRG67262;
 				ENABLE_PREVIEWS = YES;
 				GENERATE_INFOPLIST_FILE = YES;
@@ -604,7 +608,7 @@
 					"$(inherited)",
 					"@executable_path/Frameworks",
 				);
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = zhengyk.StoreSense;
 				PRODUCT_NAME = StoreSense;
 				STRING_CATALOG_GENERATE_SYMBOLS = YES;
@@ -622,11 +626,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 9YDRG67262;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = zhengyk.StoreSenseTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -644,11 +648,11 @@
 			buildSettings = {
 				BUNDLE_LOADER = "$(TEST_HOST)";
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 9YDRG67262;
 				GENERATE_INFOPLIST_FILE = YES;
 				IPHONEOS_DEPLOYMENT_TARGET = 15.0;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = zhengyk.StoreSenseTests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -665,10 +669,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 9YDRG67262;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = zhengyk.StoreSenseUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;
@@ -685,10 +689,10 @@
 			isa = XCBuildConfiguration;
 			buildSettings = {
 				CODE_SIGN_STYLE = Automatic;
-				CURRENT_PROJECT_VERSION = 1;
+				CURRENT_PROJECT_VERSION = 2;
 				DEVELOPMENT_TEAM = 9YDRG67262;
 				GENERATE_INFOPLIST_FILE = YES;
-				MARKETING_VERSION = 1.0;
+				MARKETING_VERSION = 1.1;
 				PRODUCT_BUNDLE_IDENTIFIER = zhengyk.StoreSenseUITests;
 				PRODUCT_NAME = "$(TARGET_NAME)";
 				STRING_CATALOG_GENERATE_SYMBOLS = NO;

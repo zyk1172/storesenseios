@@ -291,7 +291,7 @@ struct ItemDetailView: View {
     @State private var isRefineFinished = false
     @State private var refineError: String?
     @State private var refreshID = UUID()  // 用于强制刷新UI
-    @AppStorage("openai_api_key") private var apiKey = ""
+    @State private var apiKey = ""
     @AppStorage("openai_base_url") private var baseURL = "https://api.openai.com/v1"
     @AppStorage("openai_model") private var model = "gpt-4o"
     private let storageService = ObjectStorageService()
@@ -370,6 +370,9 @@ struct ItemDetailView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .onAppear {
+            self.apiKey = KeychainManager.shared.loadKey()
+        }
         .overlay {
             if isRefining {
                 ZStack {

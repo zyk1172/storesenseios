@@ -25,7 +25,7 @@ struct SearchView: View {
 
     private let storage = ObjectStorageService()
     private let historyService = SearchHistoryService()
-    @AppStorage("openai_api_key") private var apiKey = ""
+    @State private var apiKey = ""
     @AppStorage("openai_base_url") private var baseURL = "https://api.openai.com/v1"
     @AppStorage("openai_model") private var model = "gpt-4o"
 
@@ -183,6 +183,9 @@ struct SearchView: View {
             }
         }
         .navigationViewStyle(.stack)
+        .onAppear {
+            self.apiKey = KeychainManager.shared.loadKey()
+        }
     }
 
     private func performSearch() {
