@@ -3,6 +3,7 @@ import Combine
 
 struct DetectView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var llmManager: LLMManager
     @State private var selectedImage: UIImage?
     @State private var isProcessing = false
     @State private var isDetectFinished = false
@@ -12,13 +13,7 @@ struct DetectView: View {
     @State private var detectionMode = 0 
     @State private var manualJSONText = ""
     @State private var showCopyToast = false
-    @State private var showCamera = false
-    @State private var showPhotoPicker = false
     @State private var showTutorial = false
-
-    @State private var apiKey = ""
-    @AppStorage("openai_base_url") private var baseURL = "https://api.openai.com/v1"
-    @AppStorage("openai_model") private var model = "gpt-4o"
 
     var body: some View {
         NavigationView {
@@ -90,9 +85,6 @@ struct DetectView: View {
             }
         }
         .navigationViewStyle(.stack)
-        .onAppear {
-            self.apiKey = KeychainManager.shared.loadKey()
-        }
     }
 
     // MARK: - Subviews
@@ -113,7 +105,7 @@ struct DetectView: View {
                 HStack(spacing: 16) {
                     // 左边：拍照识别
                     Button {
-                        showCamera = true
+                        presentCamera()
                     } label: {
                         VStack(spacing: 12) {
                             Image(systemName: "camera")
@@ -135,7 +127,7 @@ struct DetectView: View {
                     
                     // 右边：选择照片
                     Button {
-                        showPhotoPicker = true
+                        presentPhotoLibrary()
                     } label: {
                         VStack(spacing: 12) {
                             Image(systemName: "photo.on.rectangle.angled")
@@ -152,14 +144,6 @@ struct DetectView: View {
                     }
                 }
             }
-        }
-        .fullScreenCover(isPresented: $showCamera) {
-            ImagePicker(image: $selectedImage, sourceType: .camera)
-                .ignoresSafeArea()
-        }
-        .fullScreenCover(isPresented: $showPhotoPicker) {
-            ImagePicker(image: $selectedImage, sourceType: .photoLibrary)
-                .ignoresSafeArea()
         }
     }
 
@@ -179,11 +163,11 @@ struct DetectView: View {
                 }
                 .frame(maxWidth: .infinity)
                 .padding()
-                .background(isProcessing || selectedImage == nil || apiKey.isEmpty ? Color.gray : Color.blue)
+                .background(isProcessing || selectedImage == nil || llmManager.currentConfig.apiKey.isEmpty ? Color.gray : Color.blue)
                 .foregroundStyle(.white)
                 .cornerRadius(12)
             }
-            .disabled(isProcessing || selectedImage == nil || apiKey.isEmpty)
+            .disabled(isProcessing || selectedImage == nil || llmManager.currentConfig.apiKey.isEmpty)
             
             if isProcessing {
                 AILoadingView(title: "正在识别物品...", isFinished: $isDetectFinished)
@@ -249,6 +233,56 @@ struct DetectView: View {
 
     // MARK: - Actions
 
+    private func presentCamera() {
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let rootVC = windowScene.windows.first?.rootViewController else { return }
+
+        let picker = UIImagePickerController()
+        picker.sourceType = .camera
+        picker.delegate = CameraProxy.shared
+        picker.allowsEditing = false
+
+        CameraProxy.shared.onImagePicked = { [weak rootVC] image in
+            rootVC?.dismiss(animated: true) {
+                if let root = rootVC {
+                    presentMantisCrop(from: root, image: image, onCropped: { cropped in
+                        selectedImage = cropped
+                    }, onCancel: {})
+                }
+            }
+        }
+        rootVC.present(picker, animated: true)
+    }
+
+    private func presentPhotoLibrary() {
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let rootVC = windowScene.windows.first?.rootViewController else { return }
+
+        let picker = UIImagePickerController()
+        picker.sourceType = .photoLibrary
+        picker.delegate = CameraProxy.shared
+        picker.allowsEditing = false
+
+        CameraProxy.shared.onImagePicked = { [weak rootVC] image in
+            rootVC?.dismiss(animated: true) {
+                if let root = rootVC {
+                    presentMantisCrop(from: root, image: image, onCropped: { cropped in
+                        selectedImage = cropped
+                    }, onCancel: {})
+                }
+            }
+        }
+        rootVC.present(picker, animated: true)
+    }
+
+    private func presentCrop(_ image: UIImage) {
+        guard let windowScene = UIApplication.shared.connectedScenes.first as? UIWindowScene,
+              let rootVC = windowScene.windows.first?.rootViewController else { return }
+        presentMantisCrop(from: rootVC, image: image, onCropped: { cropped in
+            selectedImage = cropped
+        }, onCancel: {})
+    }
+
     private func copyPrompt() {
         // 显式引用类名以确保编译器识别静态属性
         UIPasteboard.general.string = AIRecognitionService.recognitionPrompt
@@ -259,17 +293,55 @@ struct DetectView: View {
     }
 
     private func detect() async {
-        guard let data = selectedImage?.jpegData(compressionQuality: 0.8) else { return }
+        guard let image = selectedImage else { return }
         isProcessing = true
         isDetectFinished = false
         error = nil
         do {
-            let res = try await AIRecognitionService(apiKey: apiKey, baseURL: baseURL, model: model).recognizeObject(imageData: data)
-            
+            let config = llmManager.currentConfig
+            let service = AIRecognitionService(apiKey: config.apiKey, baseURL: config.baseURL, model: config.model)
+
+            // 处理图片：去 EXIF → 缩放
+            let stripped = ImageProcessingService.stripMetadata(from: image)
+            let resized = ImageProcessingService.resize(stripped, maxDimension: ImageProcessingService.maxDimension)
+
+            let res: AIRecognitionResult
+            let refItems = appState.currentRoom?.items
+
+            // 暂时关闭四宫格/九宫格切分，先用整图验证坐标偏移问题。
+#if false
+            let pxW = CGFloat(resized.cgImage?.width ?? 0)
+            let pxH = CGFloat(resized.cgImage?.height ?? 0)
+            let area = pxW * pxH
+            let threshold4 = ImageProcessingService.maxDimension * ImageProcessingService.maxDimension * 0.6
+            let threshold9 = ImageProcessingService.maxDimension * ImageProcessingService.maxDimension * 1.2
+            if area > threshold9 {
+                // 生成整图参考（压缩到 1024px，用于定位判断）
+                let fullRef = ImageProcessingService.drawCoordinateGrid(on: ImageProcessingService.resize(resized, maxDimension: 1024))
+                let fullB64 = fullRef.jpegData(compressionQuality: 0.8)?.base64EncodedString()
+                let chips = ImageProcessingService.gridSplitWithInfo(resized, rows: 3, cols: 3)
+                res = try await service.recognizeMultipleImagesWithInfo(chips: chips, gridRows: 3, gridCols: 3, referenceItems: refItems, fullBase64Image: fullB64)
+            } else if area > threshold4 {
+                let fullRef = ImageProcessingService.drawCoordinateGrid(on: ImageProcessingService.resize(resized, maxDimension: 1024))
+                let fullB64 = fullRef.jpegData(compressionQuality: 0.8)?.base64EncodedString()
+                let chips = ImageProcessingService.gridSplitWithInfo(resized, rows: 2, cols: 2)
+                res = try await service.recognizeMultipleImagesWithInfo(chips: chips, gridRows: 2, gridCols: 2, referenceItems: refItems, fullBase64Image: fullB64)
+            } else {
+                guard let data = resized.jpegData(compressionQuality: 0.85) else {
+                    throw AIRecognitionError.invalidImage
+                }
+                res = try await service.recognizeObject(imageData: data, referenceItems: refItems)
+            }
+#else
+            guard let data = resized.jpegData(compressionQuality: 0.9) else {
+                throw AIRecognitionError.invalidImage
+            }
+            res = try await service.recognizeObject(imageData: data, referenceItems: refItems)
+#endif
+
             isDetectFinished = true
-            // 等待半秒让100%动画走完
             try? await Task.sleep(nanoseconds: 500_000_000)
-            
+
             withAnimation { self.result = res }
         } catch {
             self.error = error.localizedDescription
@@ -310,22 +382,26 @@ struct DetectionResultCard: View {
     @State private var saved = false
     var onSaved: (() -> Void)? = nil
 
+    private var scoreColor: Color {
+        guard let score = result.cleanlinessScore else { return .secondary }
+        if score >= 75 { return .green }
+        if score >= 55 { return .orange }
+        return .red
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 16) {
+            // 标题行
             HStack {
                 Image(systemName: "checkmark.circle.fill").foregroundStyle(.green)
                 Text("识别结果").font(.headline)
                 Spacer()
-                
-                // 保存按钮移到第一行
                 if appState.currentRoom != nil {
                     Button {
                         save()
                     } label: {
-                        // 使用 Label 闭包构造器来手动设置 Text 权重，以支持 iOS 16 以下系统
                         Label {
-                            Text("保存")
-                                .fontWeight(.bold)
+                            Text("保存").fontWeight(.bold)
                         } icon: {
                             Image(systemName: "square.and.arrow.down.fill")
                         }
@@ -333,38 +409,96 @@ struct DetectionResultCard: View {
                     }
                     .buttonStyle(.borderedProminent)
                     .controlSize(.small)
-                    .alert("已保存", isPresented: $saved) { 
-                        Button("OK", role: .cancel) {
-                            onSaved?()
-                        }
+                    .alert("已保存", isPresented: $saved) {
+                        Button("OK", role: .cancel) { onSaved?() }
                     }
                 }
             }
             Divider()
-            
+
+            // 整洁评分卡片
+            if let level = result.cleanlinessLevel, let score = result.cleanlinessScore {
+                VStack(spacing: 12) {
+                    HStack {
+                        Text("收纳整洁度").font(.headline)
+                        Spacer()
+                        Text(level)
+                            .font(.headline)
+                            .foregroundStyle(scoreColor)
+                    }
+                    // 分数条
+                    GeometryReader { geo in
+                        ZStack(alignment: .leading) {
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(Color(.systemGray5))
+                            RoundedRectangle(cornerRadius: 6)
+                                .fill(scoreColor)
+                                .frame(width: geo.size.width * CGFloat(score) / 100.0)
+                        }
+                    }
+                    .frame(height: 10)
+                    Text("\(score) / 100")
+                        .font(.caption)
+                        .foregroundStyle(.secondary)
+                        .frame(maxWidth: .infinity, alignment: .trailing)
+
+                    // 五维度得分
+                    if let dims = result.dimensionScores {
+                        VStack(spacing: 6) {
+                            dimensionRow(label: "分类归位", score: dims.categoryPlacement, max: 25)
+                            dimensionRow(label: "空间利用", score: dims.spaceUsage, max: 20)
+                            dimensionRow(label: "取用便利", score: dims.accessibility, max: 20)
+                            dimensionRow(label: "视觉整洁", score: dims.visualTidiness, max: 20)
+                            dimensionRow(label: "安全卫生", score: dims.safetyHygiene, max: 15)
+                        }
+                    }
+
+                    // 主要问题
+                    if let problems = result.mainProblems, !problems.isEmpty {
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("主要问题").font(.caption).bold().foregroundStyle(.secondary)
+                            ForEach(problems, id: \.self) { problem in
+                                HStack(alignment: .top, spacing: 4) {
+                                    Image(systemName: "exclamationmark.circle.fill")
+                                        .font(.caption2)
+                                        .foregroundStyle(.orange)
+                                    Text(problem)
+                                        .font(.caption)
+                                        .foregroundStyle(.secondary)
+                                }
+                            }
+                        }
+                    }
+                }
+                .padding()
+                .background(Color(.tertiarySystemBackground))
+                .cornerRadius(12)
+            }
+
+            // 参照物
             if let anchor = result.anchorObject {
                 HStack {
                     Text("参照物").bold().frame(width: 80)
                     Text(anchor).foregroundStyle(.blue)
                 }
                 .font(.subheadline)
-                .padding(.bottom, 8)
             }
-            
+
+            // 物品列表
             if !result.items.isEmpty {
-                Text("识别到的物品：")
-                    .font(.subheadline)
-                    .fontWeight(.bold)
-                ForEach(result.items, id: \.name) { item in
+                Text("识别到的物品：").font(.subheadline).fontWeight(.bold)
+                ForEach(Array(result.items.enumerated()), id: \.offset) { _, item in
                     VStack(alignment: .leading, spacing: 4) {
                         HStack {
                             Text(item.name).font(.headline)
                             Spacer()
                             Text(Double(item.confidence), format: .percent.precision(.fractionLength(0)))
-                                .font(.caption)
-                                .foregroundStyle(.secondary)
+                                .font(.caption).foregroundStyle(.secondary)
                         }
                         Text(item.relativeLocation).font(.caption).foregroundStyle(.blue)
+                        if !item.attributes.isEmpty {
+                            Text(item.attributes).font(.caption2).foregroundStyle(.secondary)
+                        }
                         if !item.description.isEmpty {
                             Text(item.description).font(.caption2).foregroundStyle(.secondary)
                         }
@@ -374,15 +508,36 @@ struct DetectionResultCard: View {
                     .cornerRadius(8)
                 }
             }
-            
+
             if appState.currentRoom == nil {
                 Divider()
                 Text("请先选择收纳位").font(.caption).foregroundStyle(.secondary)
             }
         }
         .padding()
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 12))
+    }
+
+    private func dimensionRow(label: String, score: Int, max: Int) -> some View {
+        HStack {
+            Text(label)
+                .font(.caption)
+                .frame(width: 60, alignment: .leading)
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(Color(.systemGray5))
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(scoreColor.opacity(0.7))
+                        .frame(width: geo.size.width * CGFloat(score) / CGFloat(max))
+                }
+            }
+            .frame(height: 6)
+            Text("\(score)/\(max)")
+                .font(.caption2)
+                .foregroundStyle(.secondary)
+                .frame(width: 36, alignment: .trailing)
+        }
     }
 
     private func save() {
@@ -395,6 +550,7 @@ struct DetectionResultCard: View {
                 category: item.category,
                 relativeLocation: item.relativeLocation,
                 description: item.description,
+                attributes: item.attributes,
                 confidence: item.confidence,
                 coordX: item.coordX,
                 coordY: item.coordY
@@ -408,6 +564,9 @@ struct DetectionResultCard: View {
         // 保存收纳建议和幽默评价
         location.organizingAdvice = result.organizingAdvice
         location.funnyComment = result.funnyComment
+        location.cleanlinessLevel = result.cleanlinessLevel
+        location.cleanlinessScore = result.cleanlinessScore
+        location.mainProblems = result.mainProblems
         
         // 根据是否有图片设置输入类型和封面
         if let image = selectedImage {
@@ -638,3 +797,22 @@ struct TutorialFeatureRow: View {
     }
 }
 
+// MARK: - 相机代理（单例，持有回调）
+
+class CameraProxy: NSObject, UIImagePickerControllerDelegate, UINavigationControllerDelegate {
+    static let shared = CameraProxy()
+    var onImagePicked: ((UIImage) -> Void)?
+
+    func imagePickerController(_ picker: UIImagePickerController,
+                               didFinishPickingMediaWithInfo info: [UIImagePickerController.InfoKey: Any]) {
+        if let image = info[.originalImage] as? UIImage {
+            onImagePicked?(image)
+        }
+        onImagePicked = nil
+    }
+
+    func imagePickerControllerDidCancel(_ picker: UIImagePickerController) {
+        picker.dismiss(animated: true)
+        onImagePicked = nil
+    }
+}

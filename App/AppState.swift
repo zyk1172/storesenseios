@@ -18,7 +18,6 @@ class AppState: ObservableObject {
     init() {
         loadRooms()
         loadGroups()
-        ensureDefaultGroup()
         rebuildSearchIndex()
     }
 
@@ -30,16 +29,9 @@ class AppState: ObservableObject {
         groups = storageService.fetchAllGroups()
     }
 
-    private func ensureDefaultGroup() {
-        if !groups.contains(where: { $0.name == "默认" }) {
-            let defaultGroup = StorageGroup(name: "默认")
-            storageService.saveGroup(defaultGroup)
-            loadGroups()
-        }
-    }
-
-    func createRoom(name: String, groupName: String = "默认") -> StorageLocation {
-        let room = StorageLocation(name: name, groupName: groupName)
+    func createRoom(name: String, groupName: String? = nil) -> StorageLocation {
+        let finalGroup = groupName ?? groups.first?.name ?? ""
+        let room = StorageLocation(name: name, groupName: finalGroup)
         storageService.saveRoom(room)
         loadRooms()
         currentRoom = room
@@ -62,10 +54,11 @@ class AppState: ObservableObject {
     }
 
     func deleteGroup(_ group: StorageGroup) {
-        // 将该空间下的收纳位移到默认空间
+        // 将该空间下的收纳位移到第一个剩余空间
+        let fallbackName = groups.first { $0.id != group.id }?.name ?? ""
         for room in rooms where room.groupName == group.name {
             var movedRoom = room
-            movedRoom.groupName = "默认"
+            movedRoom.groupName = fallbackName
             storageService.saveRoom(movedRoom)
         }
         storageService.deleteGroup(group)

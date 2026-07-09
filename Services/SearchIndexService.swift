@@ -154,6 +154,15 @@ class SearchIndexService {
                 return true
             }
         }
+        if !item.attributes.isEmpty {
+            let tokenizer = NLTokenizer(unit: .word)
+            tokenizer.string = item.attributes
+            tokenizer.enumerateTokens(in: item.attributes.startIndex..<item.attributes.endIndex) { range, _ in
+                let word = String(item.attributes[range])
+                if word.count > 1 { keywords.insert(word) }
+                return true
+            }
+        }
         return Array(keywords)
     }
     
@@ -169,6 +178,9 @@ class SearchIndexService {
         var fullDescription = "位置：\(room.name)\n相对位置：\(item.relativeLocation)\n分类：\(item.category)"
         if !item.description.isEmpty {
             fullDescription += "\n描述：\(item.description)"
+        }
+        if !item.attributes.isEmpty {
+            fullDescription += "\n属性：\(item.attributes)"
         }
         attributeSet.textContent = fullDescription
         

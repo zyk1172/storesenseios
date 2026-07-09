@@ -3,14 +3,11 @@ import SwiftUI
 struct DetectionConfirmView: View {
     let image: UIImage
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var llmManager: LLMManager
     @Environment(\.dismiss) private var dismiss
     @State private var isProcessing = false
     @State private var result: AIRecognitionResult?
     @State private var error: String?
-
-    @AppStorage("openai_api_key") private var apiKey = ""
-    @AppStorage("openai_base_url") private var baseURL = "https://api.openai.com/v1"
-    @AppStorage("openai_model") private var model = "gpt-4o"
 
     var body: some View {
         NavigationView {
@@ -39,10 +36,13 @@ struct DetectionConfirmView: View {
                     }
 
                     Section(header: Text("识别到的物品")) {
-                        ForEach(res.items, id: \.name) { item in
+                        ForEach(Array(res.items.enumerated()), id: \.offset) { _, item in
                             VStack(alignment: .leading) {
                                 Text(item.name).font(.headline)
                                 Text(item.relativeLocation).font(.subheadline).foregroundStyle(.blue)
+                                if !item.attributes.isEmpty {
+                                    Text(item.attributes).font(.caption).foregroundStyle(.secondary)
+                                }
                             }
                         }
                     }
@@ -66,10 +66,45 @@ struct DetectionConfirmView: View {
     }
 
     private func detect() async {
-        guard let data = image.jpegData(compressionQuality: 0.8) else { return }
         isProcessing = true
         do {
-            result = try await AIRecognitionService(apiKey: apiKey, baseURL: baseURL, model: model).recognizeObject(imageData: data)
+            let config = llmManager.currentConfig
+            let service = AIRecognitionService(apiKey: config.apiKey, baseURL: config.baseURL, model: config.model)
+
+            let stripped = ImageProcessingService.stripMetadata(from: image)
+            let resized = ImageProcessingService.resize(stripped, maxDimension: ImageProcessingService.maxDimension)
+
+            let refItems = appState.currentRoom?.items
+
+            // 暂时关闭四宫格/九宫格切分，先用整图验证坐标偏移问题。
+#if false
+            let pxW = CGFloat(resized.cgImage?.width ?? 0)
+            let pxH = CGFloat(resized.cgImage?.height ?? 0)
+            let area = pxW * pxH
+            let threshold4 = ImageProcessingService.maxDimension * ImageProcessingService.maxDimension * 0.6
+            let threshold9 = ImageProcessingService.maxDimension * ImageProcessingService.maxDimension * 1.2
+            if area > threshold9 {
+                let fullRef = ImageProcessingService.drawCoordinateGrid(on: ImageProcessingService.resize(resized, maxDimension: 1024))
+                let fullB64 = fullRef.jpegData(compressionQuality: 0.8)?.base64EncodedString()
+                let chips = ImageProcessingService.gridSplitWithInfo(resized, rows: 3, cols: 3)
+                result = try await service.recognizeMultipleImagesWithInfo(chips: chips, gridRows: 3, gridCols: 3, referenceItems: refItems, fullBase64Image: fullB64)
+            } else if area > threshold4 {
+                let fullRef = ImageProcessingService.drawCoordinateGrid(on: ImageProcessingService.resize(resized, maxDimension: 1024))
+                let fullB64 = fullRef.jpegData(compressionQuality: 0.8)?.base64EncodedString()
+                let chips = ImageProcessingService.gridSplitWithInfo(resized, rows: 2, cols: 2)
+                result = try await service.recognizeMultipleImagesWithInfo(chips: chips, gridRows: 2, gridCols: 2, referenceItems: refItems, fullBase64Image: fullB64)
+            } else {
+                guard let data = resized.jpegData(compressionQuality: 0.85) else {
+                    throw AIRecognitionError.invalidImage
+                }
+                result = try await service.recognizeObject(imageData: data, referenceItems: refItems)
+            }
+#else
+            guard let data = resized.jpegData(compressionQuality: 0.9) else {
+                throw AIRecognitionError.invalidImage
+            }
+            result = try await service.recognizeObject(imageData: data, referenceItems: refItems)
+#endif
         } catch {
             self.error = error.localizedDescription
         }
@@ -86,6 +121,7 @@ struct DetectionConfirmView: View {
                 category: item.category,
                 relativeLocation: item.relativeLocation,
                 description: item.description,
+                attributes: item.attributes,
                 confidence: item.confidence,
                 coordX: item.coordX,
                 coordY: item.coordY
@@ -106,6 +142,9 @@ struct DetectionConfirmView: View {
         // 保存收纳建议和幽默评价
         location.organizingAdvice = res.organizingAdvice
         location.funnyComment = res.funnyComment
+        location.cleanlinessLevel = res.cleanlinessLevel
+        location.cleanlinessScore = res.cleanlinessScore
+        location.mainProblems = res.mainProblems
         
         // 保存并刷新
         ObjectStorageService().saveRoom(location)

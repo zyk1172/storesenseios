@@ -39,32 +39,29 @@ struct MapView: View {
     
     private var statisticsCards: some View {
         LazyVGrid(columns: [GridItem(.flexible()), GridItem(.flexible())], spacing: 16) {
-            StatCard(
+            GradientStatCard(
                 title: "收纳位数量",
                 value: "\(appState.rooms.count)",
                 icon: "archivebox.fill",
-                color: .blue
+                colors: [.blue, .cyan]
             )
-            
-            StatCard(
+            GradientStatCard(
                 title: "物品总数",
                 value: "\(totalItemsCount)",
                 icon: "cube.box.fill",
-                color: .green
+                colors: [.green, .mint]
             )
-            
-            StatCard(
+            GradientStatCard(
                 title: "最近查找",
                 value: lastSearchText,
                 icon: "clock.fill",
-                color: .purple
+                colors: [.purple, .indigo]
             )
-            
-            StatCard(
+            GradientStatCard(
                 title: "最常查找",
                 value: mostSearchedText,
                 icon: "flame.fill",
-                color: .orange
+                colors: [.orange, .red]
             )
         }
     }
@@ -246,26 +243,23 @@ struct StatCard: View {
                     .foregroundStyle(color)
                 Spacer()
             }
-            
             Spacer(minLength: 0)
-            
             Text(value)
                 .font(.title2)
                 .bold()
                 .foregroundStyle(.primary)
-                .lineLimit(1) // 限制为一行，防止撑开高度
-                .minimumScaleFactor(0.6) // 允许缩小文字以适应宽度
-            
+                .lineLimit(1)
+                .minimumScaleFactor(0.6)
             Text(title)
                 .font(.caption)
                 .foregroundStyle(.secondary)
                 .lineLimit(1)
         }
         .padding()
-        .frame(maxWidth: .infinity) // 占据网格全部宽度
-        .frame(height: 100) // 设置固定高度，确保四个框完全一致
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(12)
+        .frame(maxWidth: .infinity)
+        .frame(height: 100)
+        .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 16))
+        .shadow(color: color.opacity(0.15), radius: 8, x: 0, y: 4)
     }
 }
 
@@ -282,18 +276,14 @@ struct ItemDetailView: View {
     /// 父视图传入的回调：物品被删除
     var onItemDeleted: (() -> Void)?
 
-    @State private var isEditing = false
-    @State private var editName = ""
     @State private var showDeleteConfirm = false
     @State private var showCamera = false
     @State private var capturedImage: UIImage?
     @State private var isRefining = false
     @State private var isRefineFinished = false
     @State private var refineError: String?
-    @State private var refreshID = UUID()  // 用于强制刷新UI
-    @State private var apiKey = ""
-    @AppStorage("openai_base_url") private var baseURL = "https://api.openai.com/v1"
-    @AppStorage("openai_model") private var model = "gpt-4o"
+    @State private var refreshID = UUID()
+    @EnvironmentObject var llmManager: LLMManager
     private let storageService = ObjectStorageService()
 
     // 兼容旧调用方式
@@ -331,6 +321,9 @@ struct ItemDetailView: View {
                         if !item.description.isEmpty {
                             descriptionCard
                         }
+                        if !item.attributes.isEmpty {
+                            attributesCard
+                        }
                         timeCard
                         actionButtons
                     }
@@ -341,27 +334,8 @@ struct ItemDetailView: View {
             .id(refreshID)
             .navigationBarTitleDisplayMode(.inline)
             .toolbar {
-                ToolbarItem(placement: .navigationBarLeading) {
-                    Button {
-                        editName = item.name
-                        isEditing = true
-                    } label: {
-                        Image(systemName: "pencil")
-                    }
-                }
                 ToolbarItem(placement: .navigationBarTrailing) {
                     Button("关闭") { dismiss() }
-                }
-            }
-            .alert("修改名称", isPresented: $isEditing) {
-                TextField("物品名称", text: $editName)
-                Button("取消", role: .cancel) {}
-                Button("保存") {
-                    let newName = editName.trimmingCharacters(in: .whitespacesAndNewlines)
-                    if !newName.isEmpty {
-                        item.name = newName
-                        saveChanges()
-                    }
                 }
             }
             .confirmationDialog("确定删除「\(item.name)」？此操作不可撤销。", isPresented: $showDeleteConfirm, titleVisibility: .visible) {
@@ -370,9 +344,6 @@ struct ItemDetailView: View {
             }
         }
         .navigationViewStyle(.stack)
-        .onAppear {
-            self.apiKey = KeychainManager.shared.loadKey()
-        }
         .overlay {
             if isRefining {
                 ZStack {
@@ -441,39 +412,15 @@ struct ItemDetailView: View {
                                     .position(x: posX, y: posY - 24)
                             }
 
-                            // 底部渐变遮罩 + 位置信息
+                            // 底部渐变遮罩
                             VStack {
                                 Spacer()
                                 LinearGradient(
-                                    colors: [.clear, .black.opacity(0.5)],
+                                    colors: [.clear, .black.opacity(0.3)],
                                     startPoint: .center,
                                     endPoint: .bottom
                                 )
-                                .frame(height: 80)
-                                .overlay(alignment: .bottomLeading) {
-                                    VStack(alignment: .leading, spacing: 6) {
-                                        HStack(spacing: 8) {
-                                            Image(systemName: "cube.fill")
-                                                .foregroundStyle(.white)
-                                            Text(item.name)
-                                                .font(.headline)
-                                                .foregroundStyle(.white)
-                                        }
-                                        .padding(.horizontal, 12)
-                                        .padding(.vertical, 8)
-                                        .background(Color.blue)
-                                        .cornerRadius(8)
-
-                                        HStack(spacing: 6) {
-                                            Image(systemName: "mappin.circle.fill")
-                                                .foregroundStyle(.white.opacity(0.9))
-                                            Text("📍 \(displayName) · \(item.relativeLocation)")
-                                                .font(.subheadline)
-                                                .foregroundStyle(.white.opacity(0.9))
-                                        }
-                                    }
-                                    .padding()
-                                }
+                                .frame(height: 40)
                             }
                         }
                     }
@@ -584,6 +531,22 @@ struct ItemDetailView: View {
         .cornerRadius(12)
     }
 
+    private var attributesCard: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Label("属性", systemImage: "tag.fill")
+                .font(.headline)
+                .foregroundStyle(.orange)
+
+            Text(item.attributes)
+                .font(.body)
+                .foregroundStyle(.secondary)
+        }
+        .padding()
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(12)
+    }
+
     // MARK: - 详细描述卡片
 
     private var descriptionCard: some View {
@@ -619,17 +582,6 @@ struct ItemDetailView: View {
 
     private var actionButtons: some View {
         HStack(spacing: 12) {
-            Button {
-                editName = item.name
-                isEditing = true
-            } label: {
-                Image(systemName: "pencil")
-                    .frame(maxWidth: .infinity)
-                    .frame(height: 44)
-            }
-            .buttonStyle(.bordered)
-            .tint(.blue)
-            
             // AI精细化识别按钮
             Button {
                 showCamera = true
@@ -706,12 +658,8 @@ struct ItemDetailView: View {
     // MARK: - AI精细化识别
     
     private func refineWithAI(image: UIImage) {
-        print("🔍 refineWithAI 被调用")
-        print("   apiKey.isEmpty: \(apiKey.isEmpty)")
-        print("   location: \(location?.name ?? "nil")")
-        print("   item.id: \(item.id)")
-        
-        guard !apiKey.isEmpty else {
+        let config = llmManager.currentConfig
+        guard !config.apiKey.isEmpty else {
             refineError = "请先在设置中配置API Key"
             capturedImage = nil
             return
@@ -734,7 +682,7 @@ struct ItemDetailView: View {
                     throw NSError(domain: "", code: -1, userInfo: [NSLocalizedDescriptionKey: "图片处理失败"])
                 }
                 
-                let service = AIRecognitionService(apiKey: apiKey, baseURL: baseURL, model: model)
+                let service = AIRecognitionService(apiKey: config.apiKey, baseURL: config.baseURL, model: config.model)
                 let result = try await service.recognizeObject(imageData: imageData)
                 
                 print("   AI识别结果: \(result.items.count) 个物品")
@@ -758,6 +706,7 @@ struct ItemDetailView: View {
                     item.name = firstItem.name
                     item.category = firstItem.category
                     item.description = firstItem.description
+                    item.attributes = firstItem.attributes
                     item.relativeLocation = firstItem.relativeLocation
                     item.confidence = firstItem.confidence
                     // 保持原有坐标

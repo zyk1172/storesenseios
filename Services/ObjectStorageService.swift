@@ -93,6 +93,7 @@ class ObjectStorageService {
             for item in loc.items {
                 if item.name.lowercased().contains(q) || 
                    item.description.lowercased().contains(q) ||
+                   item.attributes.lowercased().contains(q) ||
                    item.category.lowercased().contains(q) {
                     results.append((loc, item))
                 }

@@ -6,6 +6,11 @@ enum SortType: String, CaseIterable {
     case date = "创建时间"
 }
 
+private enum ItemSwipeSide {
+    case leading
+    case trailing
+}
+
 struct ScanView: View {
     @EnvironmentObject var appState: AppState
     @Binding var selectedTab: ContentView.Tab
@@ -125,6 +130,7 @@ struct ScanView: View {
             }
             .sheet(item: $selectedLocation) { location in
                 LocationDetailView(location: location, selectedTab: $selectedTab)
+                    .id(location.updatedAt)
             }
             .confirmationDialog(
                 locationToDelete.map { "确定删除「\($0.name)」及其所有物品？" } ?? "确定删除？",
@@ -408,7 +414,7 @@ struct ScanView: View {
         }
         .padding(.horizontal, 4)
         .padding(.vertical, 8)
-        .contentShape(Rectangle()) // 确保整个区域可点击
+        .contentShape(Rectangle())
         .background(Color(.systemBackground))
         .onTapGesture {
             // 如果在编辑模式，点击 Header 整行等于点击前面勾选框
@@ -516,61 +522,92 @@ struct ScanView: View {
 struct LocationCard: View {
     let location: StorageLocation
     let kleinBlue: Color
-    
+
+    /// 根据整洁等级返回浅色背景色
+    private var backgroundColor: Color {
+        guard let score = location.cleanlinessScore else {
+            return Color(.tertiarySystemBackground)
+        }
+        if score >= 75 {
+            return Color.green.opacity(0.08)
+        } else if score >= 55 {
+            return Color.orange.opacity(0.08)
+        } else {
+            return Color.red.opacity(0.08)
+        }
+    }
+
+    private var accentColor: Color {
+        guard let score = location.cleanlinessScore else {
+            return .secondary
+        }
+        if score >= 75 { return .green }
+        if score >= 55 { return .orange }
+        return .red
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            // 封面区域 (高度等比例缩小)
-            ZStack {
-                if let coverData = location.coverImageData, let uiImage = UIImage(data: coverData) {
-                    Image(uiImage: uiImage)
-                        .resizable()
-                        .scaledToFill()
-                        .frame(height: 80)
-                        .clipped()
-                } else if location.inputType == .textInput {
-                    Rectangle()
-                        .fill(kleinBlue)
-                        .frame(height: 80)
-                        .overlay {
-                            Image(systemName: "text.quote")
-                                .font(.system(size: 24))
-                                .foregroundStyle(.white.opacity(0.8))
-                        }
-                } else {
-                    Rectangle()
-                        .fill(Color(.systemGray5))
-                        .frame(height: 80)
-                        .overlay {
-                            Image(systemName: "archivebox")
-                                .font(.system(size: 24))
-                                .foregroundStyle(.secondary)
-                        }
+            // 封面：固定高度，宽度受网格列约束
+            GeometryReader { geo in
+                ZStack(alignment: .topLeading) {
+                    if let coverData = location.coverImageData, let uiImage = UIImage(data: coverData) {
+                        Image(uiImage: uiImage)
+                            .resizable()
+                            .scaledToFill()
+                            .frame(width: geo.size.width, height: 90)
+                            .clipped()
+                    } else if location.inputType == .textInput {
+                        Rectangle()
+                            .fill(
+                                LinearGradient(colors: [kleinBlue, kleinBlue.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                            )
+                            .frame(width: geo.size.width, height: 90)
+                            .overlay {
+                                Image(systemName: "text.quote")
+                                    .font(.system(size: 24))
+                                    .foregroundStyle(.white.opacity(0.8))
+                            }
+                    } else {
+                        Rectangle()
+                            .fill(.regularMaterial)
+                            .frame(width: geo.size.width, height: 90)
+                            .overlay {
+                                Image(systemName: "archivebox")
+                                    .font(.system(size: 24))
+                                    .foregroundStyle(.secondary)
+                            }
+                    }
                 }
             }
-            
-            // 信息区域 (精简布局以适应窄列宽)
-            VStack(alignment: .leading, spacing: 2) {
+            .frame(height: 90)
+
+            // 信息区：浅色背景 + 整洁等级色彩
+            VStack(alignment: .leading, spacing: 3) {
                 Text(location.name)
                     .font(.caption)
                     .fontWeight(.bold)
                     .foregroundStyle(.primary)
                     .lineLimit(1)
-                
-                HStack(spacing: 2) {
+
+                HStack(spacing: 3) {
                     Image(systemName: "cube.box.fill")
                         .font(.system(size: 8))
+                        .foregroundStyle(accentColor)
                     Text("\(location.items.count)")
                         .font(.system(size: 10, weight: .medium))
+                        .foregroundStyle(accentColor)
                 }
-                .foregroundStyle(.blue)
             }
-            .padding(.horizontal, 6)
+            .padding(.horizontal, 8)
             .padding(.vertical, 8)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(Color(.systemBackground))
+            .background(backgroundColor)
         }
-        .cornerRadius(10)
-        .shadow(color: .black.opacity(0.08), radius: 3, x: 0, y: 1)
+        .frame(maxWidth: .infinity)
+        .contentShape(RoundedRectangle(cornerRadius: 16))
+        .clipShape(RoundedRectangle(cornerRadius: 16))
+        .shadow(color: .black.opacity(0.06), radius: 8, x: 0, y: 4)
     }
 }
 
@@ -579,9 +616,15 @@ struct LocationDetailView: View {
     @EnvironmentObject var appState: AppState
     @Environment(\.dismiss) private var dismiss
     @State private var selectedItem: StorageItem?
+    @State private var editingItem: StorageItem?
+    @State private var editingItemImage: UIImage?
+    @State private var swipedItemID: UUID?
+    @State private var swipedItemSide: ItemSwipeSide?
+    @State private var swipeTimer: Timer?
     @Binding var selectedTab: ContentView.Tab
     @State private var currentLocation: StorageLocation
     @State private var showDeleteConfirm = false
+    @State private var showClearItemsConfirm = false
     @State private var showManualAdd = false
 
     init(location: StorageLocation, selectedTab: Binding<ContentView.Tab>) {
@@ -606,6 +649,10 @@ struct LocationDetailView: View {
                     if let comment = currentLocation.funnyComment, !comment.isEmpty {
                         funnyCommentSection(comment: comment)
                     }
+
+                    if let level = currentLocation.cleanlinessLevel, let score = currentLocation.cleanlinessScore {
+                        cleanlinessScoreSection(level: level, score: score, problems: currentLocation.mainProblems)
+                    }
                     
                     if let advice = currentLocation.organizingAdvice, !advice.isEmpty {
                         organizingAdviceSection(advice: advice)
@@ -614,6 +661,9 @@ struct LocationDetailView: View {
                     itemsSection
                 }
                 .padding()
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .contentShape(Rectangle())
+                .padding(.bottom, 48)
             }
             .navigationTitle(currentLocation.name)
             .navigationBarTitleDisplayMode(.inline)
@@ -637,6 +687,14 @@ struct LocationDetailView: View {
                 }
                 Button("取消", role: .cancel) {}
             }
+            .confirmationDialog("清除「\(currentLocation.name)」里的所有物品和识别记录？", isPresented: $showClearItemsConfirm, titleVisibility: .visible) {
+                Button("清除物品", role: .destructive) {
+                    clearLocationItems()
+                }
+                Button("取消", role: .cancel) {}
+            } message: {
+                Text("只会清空当前收纳位的物品、图片、参照物、评分、建议和问题记录，不会删除收纳位或收纳组。")
+            }
             .sheet(item: $selectedItem) { item in
                 ItemDetailView(
                     item: item,
@@ -644,6 +702,11 @@ struct LocationDetailView: View {
                     onItemChanged: { _ in refreshLocation() },
                     onItemDeleted: { refreshLocation() }
                 )
+            }
+            .sheet(item: $editingItem) { item in
+                ItemEditSheet(item: item, backgroundImage: editingItemImage) { updated in
+                    saveEditedItem(updated)
+                }
             }
             .sheet(isPresented: $showManualAdd) {
                 ManualAddItemView(location: currentLocation) {
@@ -659,15 +722,16 @@ struct LocationDetailView: View {
             if let coverData = currentLocation.coverImageData, let uiImage = UIImage(data: coverData) {
                 Image(uiImage: uiImage)
                     .resizable()
-                    .scaledToFill()
-                    .frame(height: 200)
-                    .clipped()
-                    .cornerRadius(16)
+                    .scaledToFit()
+                    .frame(maxWidth: .infinity)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
             } else if currentLocation.inputType == .textInput {
                 Rectangle()
-                    .fill(kleinBlue)
+                    .fill(
+                        LinearGradient(colors: [kleinBlue, kleinBlue.opacity(0.7)], startPoint: .topLeading, endPoint: .bottomTrailing)
+                    )
                     .frame(height: 200)
-                    .cornerRadius(16)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
                     .overlay {
                         VStack {
                             Image(systemName: "text.quote")
@@ -680,9 +744,9 @@ struct LocationDetailView: View {
                     }
             } else {
                 Rectangle()
-                    .fill(Color(.systemGray5))
+                    .fill(.regularMaterial)
                     .frame(height: 200)
-                    .cornerRadius(16)
+                    .clipShape(RoundedRectangle(cornerRadius: 16))
                     .overlay {
                         VStack {
                             Image(systemName: "camera")
@@ -767,6 +831,54 @@ struct LocationDetailView: View {
             .cornerRadius(10)
     }
 
+    private func cleanlinessScoreSection(level: String, score: Int, problems: [String]?) -> some View {
+        let scoreColor: Color = {
+            if score >= 75 { return .green }
+            if score >= 55 { return .orange }
+            return .red
+        }()
+
+        return VStack(alignment: .leading, spacing: 10) {
+            HStack {
+                Image(systemName: "chart.bar.fill")
+                    .foregroundStyle(scoreColor)
+                Text("整洁评分").font(.headline)
+                Spacer()
+                Text(level)
+                    .font(.subheadline).bold()
+                    .foregroundStyle(scoreColor)
+            }
+            GeometryReader { geo in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 5).fill(Color(.systemGray5))
+                    RoundedRectangle(cornerRadius: 5).fill(scoreColor)
+                        .frame(width: geo.size.width * CGFloat(score) / 100.0)
+                }
+            }
+            .frame(height: 8)
+            Text("\(score) / 100 分")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+                .frame(maxWidth: .infinity, alignment: .trailing)
+
+            if let problems, !problems.isEmpty {
+                VStack(alignment: .leading, spacing: 4) {
+                    Text("主要问题").font(.caption).bold().foregroundStyle(.secondary)
+                    ForEach(problems, id: \.self) { p in
+                        HStack(alignment: .top, spacing: 4) {
+                            Image(systemName: "exclamationmark.circle.fill")
+                                .font(.caption2).foregroundStyle(.orange)
+                            Text(p).font(.caption).foregroundStyle(.secondary)
+                        }
+                    }
+                }
+            }
+        }
+        .padding()
+        .background(Color(.secondarySystemBackground))
+        .cornerRadius(12)
+    }
+
     private func organizingAdviceSection(advice: String) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             Text("💡 收纳建议")
@@ -788,6 +900,19 @@ struct LocationDetailView: View {
                 Text("物品清单")
                     .font(.headline)
                 Spacer()
+                if !currentLocation.items.isEmpty || currentLocation.backgroundImageData != nil || currentLocation.coverImageData != nil {
+                    Button {
+                        showClearItemsConfirm = true
+                    } label: {
+                        Label("清除物品", systemImage: "trash.slash")
+                            .font(.subheadline)
+                            .padding(.horizontal, 10)
+                            .padding(.vertical, 6)
+                            .background(Color.red.opacity(0.1))
+                            .cornerRadius(8)
+                    }
+                    .foregroundStyle(.red)
+                }
                 Button {
                     showManualAdd = true
                 } label: {
@@ -810,10 +935,17 @@ struct LocationDetailView: View {
                     .cornerRadius(10)
             } else {
                 ForEach(currentLocation.items) { item in
-                    ItemRow(item: item)
-                        .onTapGesture {
-                            selectedItem = item
-                        }
+                    SwipeableItemRow(
+                        item: item,
+                        side: swipedItemID == item.id ? swipedItemSide : nil,
+                        onOpen: { side in openSwipe(for: item, side: side) },
+                        onClose: closeSwipe,
+                        onDelete: { deleteItem(item) },
+                        onEdit: { editItem(item) },
+                        onToggleVerified: { toggleVerified(item) },
+                        onTap: { selectedItem = item }
+                    )
+                        .id(item.id)
                 }
             }
         }
@@ -825,21 +957,119 @@ struct LocationDetailView: View {
             currentLocation = updated
         }
     }
+
+    private func openSwipe(for item: StorageItem, side: ItemSwipeSide) {
+        withAnimation(.spring(response: 0.25, dampingFraction: 0.85)) {
+            swipedItemID = item.id
+            swipedItemSide = side
+        }
+        swipeTimer?.invalidate()
+        swipeTimer = Timer.scheduledTimer(withTimeInterval: 3.0, repeats: false) { _ in
+            closeSwipe()
+        }
+    }
+
+    private func closeSwipe() {
+        DispatchQueue.main.async {
+            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                swipedItemID = nil
+                swipedItemSide = nil
+            }
+        }
+    }
+
+    private func clearLocationItems() {
+        var location = currentLocation
+        location.clearRecognizedContent()
+        ObjectStorageService().saveRoom(location)
+        appState.currentRoom = location
+        appState.loadRooms()
+        currentLocation = location
+        closeSwipe()
+    }
+
+    private func deleteItem(_ item: StorageItem) {
+        var location = currentLocation
+        location.items.removeAll { $0.id == item.id }
+        location.updatedAt = Date()
+        ObjectStorageService().saveRoom(location)
+        appState.currentRoom = location
+        appState.loadRooms()
+        refreshLocation()
+    }
+
+    private func editItem(_ item: StorageItem) {
+        let bg: UIImage? = {
+            if let data = currentLocation.backgroundImageData ?? currentLocation.coverImageData {
+                return UIImage(data: data)
+            }
+            return nil
+        }()
+        editingItem = item
+        editingItemImage = bg
+    }
+
+    private func saveEditedItem(_ updated: StorageItem) {
+        var location = currentLocation
+        if let idx = location.items.firstIndex(where: { $0.id == updated.id }) {
+            location.items[idx] = updated
+            location.updatedAt = Date()
+            ObjectStorageService().saveRoom(location)
+            appState.currentRoom = location
+            refreshLocation()
+        }
+    }
+
+    private func toggleVerified(_ item: StorageItem) {
+        var location = currentLocation
+        if let idx = location.items.firstIndex(where: { $0.id == item.id }) {
+            location.items[idx].isVerified.toggle()
+            location.updatedAt = Date()
+            ObjectStorageService().saveRoom(location)
+            appState.currentRoom = location
+            refreshLocation()
+        }
+    }
 }
 
 struct ItemRow: View {
     let item: StorageItem
 
+    private var accentColor: Color {
+        let palette: [Color] = [.blue, .green, .orange, .purple, .pink, .teal, .indigo]
+        let key = item.category.isEmpty ? item.name : item.category
+        let index = abs(key.hashValue) % palette.count
+        return palette[index]
+    }
+
     var body: some View {
-        HStack {
+        HStack(spacing: 12) {
+            RoundedRectangle(cornerRadius: 3)
+                .fill(accentColor)
+                .frame(width: 5)
+
             VStack(alignment: .leading, spacing: 4) {
-                Text(item.name)
-                    .font(.subheadline)
-                    .fontWeight(.bold)
+                HStack(spacing: 4) {
+                    Text(item.name)
+                        .font(.subheadline)
+                        .fontWeight(.bold)
+                    if item.isVerified {
+                        Image(systemName: "checkmark.seal.fill")
+                            .font(.caption2)
+                            .foregroundStyle(.green)
+                    }
+                }
                 
                 Text(item.relativeLocation)
                     .font(.caption)
-                    .foregroundStyle(.blue)
+                    .foregroundStyle(accentColor)
+
+                if !item.attributes.isEmpty {
+                    Text(item.attributes)
+                        .font(.caption2)
+                        .foregroundStyle(.secondary)
+                        .lineLimit(1)
+                }
                 
                 if !item.description.isEmpty {
                     Text(item.description)
@@ -856,17 +1086,363 @@ struct ItemRow: View {
                     .font(.caption2)
                     .padding(.horizontal, 6)
                     .padding(.vertical, 2)
-                    .background(Color(.tertiarySystemBackground))
-                    .cornerRadius(4)
+                    .foregroundStyle(accentColor)
+                    .background(accentColor.opacity(0.12), in: RoundedRectangle(cornerRadius: 4))
                 
                 Text(Double(item.confidence), format: .percent.precision(.fractionLength(0)))
                     .font(.caption2)
-                    .foregroundStyle(.secondary)
+                    .foregroundStyle(item.confidence >= 0.8 ? .green : .orange)
             }
         }
         .padding()
-        .background(Color(.secondarySystemBackground))
-        .cornerRadius(10)
+        .background(Color(.secondarySystemBackground), in: RoundedRectangle(cornerRadius: 12))
+        .overlay(
+            RoundedRectangle(cornerRadius: 12)
+                .stroke(accentColor.opacity(0.18), lineWidth: 1)
+        )
+    }
+}
+
+private struct SwipeableItemRow: View {
+    let item: StorageItem
+    let side: ItemSwipeSide?
+    let onOpen: (ItemSwipeSide) -> Void
+    let onClose: () -> Void
+    let onDelete: () -> Void
+    let onEdit: () -> Void
+    let onToggleVerified: () -> Void
+    let onTap: () -> Void
+
+    @State private var dragX: CGFloat = 0
+
+    private let leadingWidth: CGFloat = 168
+    private let trailingWidth: CGFloat = 84
+    private let horizontalActivationDistance: CGFloat = 22
+    private let horizontalBiasRatio: CGFloat = 1.45
+
+    private var restingOffset: CGFloat {
+        switch side {
+        case .leading: return leadingWidth
+        case .trailing: return -trailingWidth
+        case .none: return 0
+        }
+    }
+
+    private var displayOffset: CGFloat {
+        min(max(restingOffset + dragX, -trailingWidth), leadingWidth)
+    }
+
+    private var leadingProgress: Double {
+        Double(min(max(displayOffset / leadingWidth, 0), 1))
+    }
+
+    private var trailingProgress: Double {
+        Double(min(max(-displayOffset / trailingWidth, 0), 1))
+    }
+
+    private func horizontalTranslation(from value: DragGesture.Value) -> CGFloat {
+        let width = value.translation.width
+        let height = value.translation.height
+        guard abs(width) >= horizontalActivationDistance,
+              abs(width) > abs(height) * horizontalBiasRatio else {
+            return 0
+        }
+        return width
+    }
+
+    var body: some View {
+        ZStack {
+            ItemRow(item: item)
+                .offset(x: displayOffset)
+                .contentShape(Rectangle())
+                .onTapGesture {
+                    if side == nil {
+                        onTap()
+                    } else {
+                        onClose()
+                    }
+                }
+                .simultaneousGesture(
+                    DragGesture(minimumDistance: 18, coordinateSpace: .local)
+                        .onChanged { value in
+                            let horizontal = horizontalTranslation(from: value)
+                            if horizontal != 0 {
+                                dragX = horizontal
+                            } else if side == nil {
+                                dragX = 0
+                            }
+                        }
+                        .onEnded { value in
+                            let horizontal = horizontalTranslation(from: value)
+                            guard horizontal != 0 else {
+                                dragX = 0
+                                return
+                            }
+                            let projected = restingOffset + horizontal
+                            if projected > 64 {
+                                onOpen(.leading)
+                            } else if projected < -44 {
+                                onOpen(.trailing)
+                            } else {
+                                onClose()
+                            }
+                            withAnimation(.spring(response: 0.25, dampingFraction: 0.9)) {
+                                dragX = 0
+                            }
+                        }
+                )
+                .zIndex(1)
+                .onChange(of: side) { newSide in
+                    if newSide == nil {
+                        dragX = 0
+                    }
+                }
+
+            HStack(spacing: 8) {
+                actionButton(title: "编辑", systemImage: "pencil", color: .blue) {
+                    onEdit()
+                    onClose()
+                }
+                actionButton(
+                    title: item.isVerified ? "取消" : "验证",
+                    systemImage: item.isVerified ? "xmark.circle" : "checkmark.seal.fill",
+                    color: item.isVerified ? .gray : .green
+                ) {
+                    onToggleVerified()
+                    onClose()
+                }
+                Spacer()
+            }
+            .padding(.leading, 4)
+            .opacity(leadingProgress)
+            .allowsHitTesting(side == .leading)
+            .zIndex(2)
+
+            HStack {
+                Spacer()
+                actionButton(title: "删除", systemImage: "trash", color: .red) {
+                    onDelete()
+                    onClose()
+                }
+                .frame(width: trailingWidth)
+            }
+            .opacity(trailingProgress)
+            .allowsHitTesting(side == .trailing)
+            .zIndex(2)
+        }
+        .clipped()
+    }
+
+    private func actionButton(title: String, systemImage: String, color: Color, action: @escaping () -> Void) -> some View {
+        Button(action: action) {
+            VStack(spacing: 4) {
+                Image(systemName: systemImage)
+                    .font(.system(size: 16, weight: .semibold))
+                Text(title)
+                    .font(.caption2)
+                    .lineLimit(1)
+            }
+            .frame(width: 74, height: 58)
+            .foregroundStyle(.white)
+            .background(color, in: RoundedRectangle(cornerRadius: 10))
+        }
+        .buttonStyle(.plain)
+    }
+}
+
+// MARK: - 物品全字段编辑
+
+private func focusedItem(from result: AIRecognitionResult) -> AIItemResult? {
+    result.items.min { lhs, rhs in
+        let lhsDistance = hypot(Double((lhs.coordX ?? 500) - 500), Double((lhs.coordY ?? 500) - 500))
+        let rhsDistance = hypot(Double((rhs.coordX ?? 500) - 500), Double((rhs.coordY ?? 500) - 500))
+        return lhsDistance < rhsDistance
+    }
+}
+
+struct ItemEditSheet: View {
+    @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var llmManager: LLMManager
+    let item: StorageItem
+    let backgroundImage: UIImage?
+    var onSave: (StorageItem) -> Void
+
+    @State private var name: String
+    @State private var category: String
+    @State private var relativeLocation: String
+    @State private var description: String
+    @State private var attributes: String
+    @State private var coordX: Float
+    @State private var coordY: Float
+    @State private var confidence: Float
+    @State private var isRecognizing: Bool = false
+    @State private var recognitionError: String?
+
+    init(item: StorageItem, backgroundImage: UIImage? = nil, onSave: @escaping (StorageItem) -> Void) {
+        self.item = item
+        self.backgroundImage = backgroundImage
+        self.onSave = onSave
+        _name = State(initialValue: item.name)
+        _category = State(initialValue: item.category)
+        _relativeLocation = State(initialValue: item.relativeLocation)
+        _description = State(initialValue: item.description)
+        _attributes = State(initialValue: item.attributes)
+        _coordX = State(initialValue: item.coordX ?? 500)
+        _coordY = State(initialValue: item.coordY ?? 500)
+        _confidence = State(initialValue: item.confidence)
+    }
+
+    var body: some View {
+        NavigationView {
+            Form {
+                Section("物品信息") {
+                    TextField("名称", text: $name)
+                    TextField("分类", text: $category)
+                    TextField("属性（如：品牌:小米; 颜色:白色）", text: $attributes)
+                    TextField("相对位置", text: $relativeLocation)
+                    TextField("描述", text: $description)
+                }
+
+                if let bg = backgroundImage {
+                    Section("坐标定位与局部识别") {
+                        InteractiveImageView(image: bg, coordX: $coordX, coordY: $coordY)
+                            .frame(height: 250)
+                            .listRowInsets(EdgeInsets())
+
+                        Button {
+                            Task { await recognizeRegion() }
+                        } label: {
+                            HStack {
+                                Spacer()
+                                if isRecognizing {
+                                    ProgressView().padding(.trailing, 8)
+                                } else {
+                                    Image(systemName: "sparkles")
+                                }
+                                Text(isRecognizing ? "正在识别当前位置..." : "按当前位置重新识别")
+                                Spacer()
+                            }
+                        }
+                        .disabled(isRecognizing || llmManager.currentConfig.apiKey.isEmpty)
+
+                        if let recognitionError {
+                            Text(recognitionError)
+                                .font(.caption)
+                                .foregroundStyle(.red)
+                        }
+                    }
+                } else {
+                    Section("坐标（0-1000）") {
+                        HStack {
+                            Text("X").foregroundStyle(.secondary).frame(width: 20)
+                            TextField("0-1000", text: Binding(
+                                get: { String(Int(coordX)) },
+                                set: { coordX = Float($0) ?? 500 }
+                            ))
+                            .keyboardType(.numberPad)
+                        }
+                        HStack {
+                            Text("Y").foregroundStyle(.secondary).frame(width: 20)
+                            TextField("0-1000", text: Binding(
+                                get: { String(Int(coordY)) },
+                                set: { coordY = Float($0) ?? 500 }
+                            ))
+                            .keyboardType(.numberPad)
+                        }
+                    }
+                }
+
+                Section("识别信息") {
+                    HStack {
+                        Text("置信度")
+                        Spacer()
+                        Text(Double(confidence), format: .percent.precision(.fractionLength(0)))
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("坐标")
+                        Spacer()
+                        Text("\(Int(coordX)), \(Int(coordY))")
+                            .foregroundStyle(.secondary)
+                    }
+                    HStack {
+                        Text("创建时间")
+                        Spacer()
+                        Text(item.createdAt, style: .date)
+                            .foregroundStyle(.secondary)
+                    }
+                }
+            }
+            .navigationTitle("编辑物品")
+            .navigationBarTitleDisplayMode(.inline)
+            .toolbar {
+                ToolbarItem(placement: .cancellationAction) {
+                    Button("取消") { dismiss() }
+                }
+                ToolbarItem(placement: .confirmationAction) {
+                    Button("保存") { save() }
+                        .disabled(name.trimmingCharacters(in: .whitespaces).isEmpty)
+                }
+            }
+        }
+        .navigationViewStyle(.stack)
+    }
+
+    private func save() {
+        var updated = item
+        updated.name = name.trimmingCharacters(in: .whitespaces)
+        updated.category = category
+        updated.relativeLocation = relativeLocation
+        updated.description = description
+        updated.attributes = attributes
+        updated.confidence = confidence
+        updated.coordX = coordX
+        updated.coordY = coordY
+        onSave(updated)
+        dismiss()
+    }
+
+    private func recognizeRegion() async {
+        guard let uiImage = backgroundImage else { return }
+        guard let crop = ImageProcessingService.focusedCropWithInfo(from: uiImage, coordX: coordX, coordY: coordY) else {
+            recognitionError = "无法截取当前位置图片"
+            return
+        }
+
+        isRecognizing = true
+        recognitionError = nil
+        defer { isRecognizing = false }
+
+        do {
+            let config = llmManager.currentConfig
+            let result = try await AIRecognitionService(
+                apiKey: config.apiKey,
+                baseURL: config.baseURL,
+                model: config.model
+            ).recognizeObject(
+                imageData: crop.data,
+                chipInstruction: AIRecognitionService.focusedRegionInstruction
+            )
+
+            guard let item = focusedItem(from: result) else {
+                recognitionError = "当前位置没有识别到明确物品"
+                return
+            }
+
+            name = item.name
+            if !item.category.isEmpty { category = item.category }
+            if !item.relativeLocation.isEmpty { relativeLocation = item.relativeLocation }
+            if !item.description.isEmpty { description = item.description }
+            attributes = item.attributes
+            confidence = item.confidence
+            if let localX = item.coordX, let localY = item.coordY {
+                let mapped = ImageProcessingService.mapCoordinate((x: localX, y: localY), crop: crop)
+                coordX = mapped.x
+                coordY = mapped.y
+            }
+        } catch {
+            recognitionError = error.localizedDescription
+        }
     }
 }
 
@@ -899,6 +1475,7 @@ struct ImagePicker: UIViewControllerRepresentable {
 // MARK: - 新增功能：手动添加物品与坐标映射
 struct ManualAddItemView: View {
     @Environment(\.dismiss) private var dismiss
+    @EnvironmentObject var llmManager: LLMManager
     var location: StorageLocation
     var onSaved: () -> Void
     
@@ -908,11 +1485,9 @@ struct ManualAddItemView: View {
     @State private var category: String = ""
     @State private var relativeLocation: String = ""
     @State private var description: String = ""
+    @State private var attributes: String = ""
     
     @State private var isRecognizing: Bool = false
-    @State private var apiKey = ""
-    @AppStorage("openai_base_url") private var baseURL = "https://api.openai.com/v1"
-    @AppStorage("openai_model") private var model = "gpt-4o"
     
     var background: UIImage? {
         if let data = location.backgroundImageData ?? location.coverImageData {
@@ -944,13 +1519,14 @@ struct ManualAddItemView: View {
                                 Spacer()
                             }
                         }
-                        .disabled(isRecognizing || apiKey.isEmpty)
+                        .disabled(isRecognizing || llmManager.currentConfig.apiKey.isEmpty)
                     }
                 }
                 
                 Section(header: Text("物品信息")) {
                     TextField("物品名称 (必填)", text: $name)
                     TextField("分类", text: $category)
+                    TextField("属性（如：品牌:小米; 颜色:白色）", text: $attributes)
                     TextField("相对位置描述", text: $relativeLocation)
                     TextField("详细描述", text: $description)
                 }
@@ -968,9 +1544,6 @@ struct ManualAddItemView: View {
             }
         }
         .navigationViewStyle(.stack)
-        .onAppear {
-            self.apiKey = KeychainManager.shared.loadKey()
-        }
     }
     
     private func saveItem() {
@@ -980,6 +1553,7 @@ struct ManualAddItemView: View {
             category: category.isEmpty ? "未分类" : category,
             relativeLocation: relativeLocation,
             description: description,
+            attributes: attributes,
             confidence: 1.0,
             coordX: background != nil ? coordX : nil,
             coordY: background != nil ? coordY : nil
@@ -997,65 +1571,63 @@ struct ManualAddItemView: View {
     
     private func recognizeRegion() async {
         guard let uiImage = background else { return }
-        isRecognizing = true
-        
-        // 截取点击区域附近 40% 的图片，提供给 AI 进行更专注的识别
-        let cropWidth = uiImage.size.width * 0.4
-        let cropHeight = uiImage.size.height * 0.4
-        let centerX = uiImage.size.width * CGFloat(coordX) / 1000.0
-        let centerY = uiImage.size.height * CGFloat(coordY) / 1000.0
-        
-        let minX = max(0, centerX - cropWidth / 2)
-        let minY = max(0, centerY - cropHeight / 2)
-        let maxX = min(uiImage.size.width, centerX + cropWidth / 2)
-        let maxY = min(uiImage.size.height, centerY + cropHeight / 2)
-        
-        let rect = CGRect(x: minX, y: minY, width: maxX - minX, height: maxY - minY)
-        
-        // 兼容图片方向的正确裁剪
-        let format = UIGraphicsImageRendererFormat()
-        format.scale = uiImage.scale
-        let renderer = UIGraphicsImageRenderer(size: rect.size, format: format)
-        let croppedImage = renderer.image { _ in
-            uiImage.draw(at: CGPoint(x: -rect.origin.x, y: -rect.origin.y))
-        }
-        
-        guard let data = croppedImage.jpegData(compressionQuality: 0.8) else {
-            isRecognizing = false
+        guard let crop = ImageProcessingService.focusedCropWithInfo(from: uiImage, coordX: coordX, coordY: coordY) else {
             return
         }
-        
+
+        isRecognizing = true
+        defer { isRecognizing = false }
+
         do {
-            let result = try await AIRecognitionService(apiKey: apiKey, baseURL: baseURL, model: model).recognizeObject(imageData: data)
-            if let firstItem = result.items.first {
-                name = firstItem.name
-                if !firstItem.category.isEmpty { category = firstItem.category }
-                if !firstItem.relativeLocation.isEmpty { relativeLocation = firstItem.relativeLocation }
-                if !firstItem.description.isEmpty { description = firstItem.description }
+            let config = llmManager.currentConfig
+            let result = try await AIRecognitionService(
+                apiKey: config.apiKey,
+                baseURL: config.baseURL,
+                model: config.model
+            ).recognizeObject(
+                imageData: crop.data,
+                chipInstruction: AIRecognitionService.focusedRegionInstruction
+            )
+            if let item = focusedItem(from: result) {
+                name = item.name
+                if !item.category.isEmpty { category = item.category }
+                if !item.relativeLocation.isEmpty { relativeLocation = item.relativeLocation }
+                if !item.description.isEmpty { description = item.description }
+                attributes = item.attributes
+                if let localX = item.coordX, let localY = item.coordY {
+                    let mapped = ImageProcessingService.mapCoordinate((x: localX, y: localY), crop: crop)
+                    coordX = mapped.x
+                    coordY = mapped.y
+                }
             }
         } catch {
             print("局部识别失败: \(error)")
         }
-        
-        isRecognizing = false
     }
 }
 
-// 支持拖拽定位并计算千分比坐标的图片视图
+// 支持缩放、拖拽定位的图片视图
 struct InteractiveImageView: View {
     let image: UIImage
     @Binding var coordX: Float
     @Binding var coordY: Float
 
+    @State private var scale: CGFloat = 1.0
+    @State private var lastScale: CGFloat = 1.0
+    @State private var imageOffset: CGSize = .zero
+    @State private var lastImageOffset: CGSize = .zero
+
     var body: some View {
         GeometryReader { geo in
-            let imageSize = image.size
+            let imageSize = CGSize(
+                width: CGFloat(image.cgImage?.width ?? Int(image.size.width)),
+                height: CGFloat(image.cgImage?.height ?? Int(image.size.height))
+            )
             let viewSize = geo.size
-            
-            // 计算渲染比例
+
             let imageRatio = imageSize.width > 0 && imageSize.height > 0 ? imageSize.width / imageSize.height : 1
             let viewRatio = viewSize.width > 0 && viewSize.height > 0 ? viewSize.width / viewSize.height : 1
-            
+
             let renderWidth: CGFloat
             let renderHeight: CGFloat
             if imageRatio > viewRatio {
@@ -1065,46 +1637,87 @@ struct InteractiveImageView: View {
                 renderHeight = viewSize.height
                 renderWidth = viewSize.height * imageRatio
             }
-            
-            let offsetX = (viewSize.width - renderWidth) / 2
-            let offsetY = (viewSize.height - renderHeight) / 2
-            
-            let currentPinX = offsetX + renderWidth * CGFloat(coordX) / 1000.0
-            let currentPinY = offsetY + renderHeight * CGFloat(coordY) / 1000.0
 
-            // ⚠️ 就是这里加了 return，指明这段代码执行后返回这个 ZStack 视图
+            let maxOffsetX = max((renderWidth * scale - viewSize.width) / 2, 0)
+            let maxOffsetY = max((renderHeight * scale - viewSize.height) / 2, 0)
+            let boundedOffset = CGSize(
+                width: min(max(imageOffset.width, -maxOffsetX), maxOffsetX),
+                height: min(max(imageOffset.height, -maxOffsetY), maxOffsetY)
+            )
+            let offsetX = (viewSize.width - renderWidth * scale) / 2 + boundedOffset.width
+            let offsetY = (viewSize.height - renderHeight * scale) / 2 + boundedOffset.height
+
+            let currentPinX = offsetX + renderWidth * scale * CGFloat(coordX) / 1000.0
+            let currentPinY = offsetY + renderHeight * scale * CGFloat(coordY) / 1000.0
+
+            let updateCoordinate: (CGPoint) -> Void = { point in
+                let localX = point.x - offsetX
+                let localY = point.y - offsetY
+                let clampedX = max(0, min(localX, renderWidth * scale))
+                let clampedY = max(0, min(localY, renderHeight * scale))
+                coordX = Float((clampedX / (renderWidth * scale)) * 1000.0)
+                coordY = Float((clampedY / (renderHeight * scale)) * 1000.0)
+            }
+
             return ZStack(alignment: .topLeading) {
-                Color.clear 
-                
+                Color.clear
+
                 Image(uiImage: image)
                     .resizable()
                     .scaledToFit()
-                    .frame(width: viewSize.width, height: viewSize.height)
-                
-                // 拖拽光标
+                    .frame(width: renderWidth * scale, height: renderHeight * scale)
+                    .position(x: viewSize.width / 2 + boundedOffset.width, y: viewSize.height / 2 + boundedOffset.height)
+                    .gesture(
+                        DragGesture(minimumDistance: 12, coordinateSpace: .local)
+                            .onChanged { val in
+                                guard scale > 1 else { return }
+                                imageOffset = CGSize(
+                                    width: min(max(lastImageOffset.width + val.translation.width, -maxOffsetX), maxOffsetX),
+                                    height: min(max(lastImageOffset.height + val.translation.height, -maxOffsetY), maxOffsetY)
+                                )
+                            }
+                            .onEnded { _ in
+                                lastImageOffset = imageOffset
+                            }
+                    )
+
+                // 拖拽光标（缩小到 20pt）
                 Image(systemName: "mappin.circle.fill")
-                    .font(.system(size: 32))
+                    .font(.system(size: 20))
                     .foregroundColor(.red)
-                    .background(Circle().fill(Color.white).frame(width: 14, height: 14))
-                    .shadow(radius: 4)
+                    .background(Circle().fill(Color.white).frame(width: 8, height: 8))
+                    .shadow(radius: 3)
                     .position(x: currentPinX, y: currentPinY)
                     .gesture(
                         DragGesture()
                             .onChanged { val in
-                                let localX = val.location.x - offsetX
-                                let localY = val.location.y - offsetY
-                                
-                                // 限制拖动范围在图片内部
-                                let clampedX = max(0, min(localX, renderWidth))
-                                let clampedY = max(0, min(localY, renderHeight))
-                                
-                                coordX = Float((clampedX / renderWidth) * 1000.0)
-                                coordY = Float((clampedY / renderHeight) * 1000.0)
+                                updateCoordinate(val.location)
                             }
                     )
             }
+            .clipped()
+            .contentShape(Rectangle())
+            .gesture(
+                MagnificationGesture()
+                    .onChanged { newScale in
+                        let nextScale = max(1.0, min(lastScale * newScale, 4.0))
+                        scale = nextScale
+                        if nextScale == 1.0 {
+                            imageOffset = .zero
+                            lastImageOffset = .zero
+                        }
+                    }
+                    .onEnded { _ in
+                        lastScale = scale
+                        let finalMaxOffsetX = max((renderWidth * scale - viewSize.width) / 2, 0)
+                        let finalMaxOffsetY = max((renderHeight * scale - viewSize.height) / 2, 0)
+                        imageOffset = CGSize(
+                            width: min(max(imageOffset.width, -finalMaxOffsetX), finalMaxOffsetX),
+                            height: min(max(imageOffset.height, -finalMaxOffsetY), finalMaxOffsetY)
+                        )
+                        lastImageOffset = imageOffset
+                    }
+            )
         }
-        .clipped()
     }
 }
-

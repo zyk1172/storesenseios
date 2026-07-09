@@ -15,6 +15,7 @@ enum SearchMode: String, CaseIterable {
 
 struct SearchView: View {
     @EnvironmentObject var appState: AppState
+    @EnvironmentObject var llmManager: LLMManager
     @State private var searchText = ""
     @State private var results: [SearchResult] = []
     @State private var selected: SearchResult?
@@ -25,9 +26,6 @@ struct SearchView: View {
 
     private let storage = ObjectStorageService()
     private let historyService = SearchHistoryService()
-    @State private var apiKey = ""
-    @AppStorage("openai_base_url") private var baseURL = "https://api.openai.com/v1"
-    @AppStorage("openai_model") private var model = "gpt-4o"
 
     var body: some View {
         NavigationView {
@@ -62,46 +60,11 @@ struct SearchView: View {
                 .padding(.vertical, 8)
 
                 if searchText.isEmpty {
-                    if appState.rooms.isEmpty {
-                        VStack(spacing: 20) {
-                            Image(systemName: "magnifyingglass").font(.system(size: 60)).foregroundStyle(.secondary)
-                            Text("搜索你的物品").font(.headline)
-                            Text("输入物品名称、描述或分类").font(.subheadline).foregroundStyle(.secondary)
-                        }.frame(maxWidth: .infinity, maxHeight: .infinity)
-                    } else {
-                        List {
-                            ForEach(appState.rooms) { location in
-                                Section(location.name) {
-                                    ForEach(location.items) { item in
-                                        HStack {
-                                            if let coverData = location.coverImageData, let uiImage = UIImage(data: coverData) {
-                                                Image(uiImage: uiImage)
-                                                    .resizable()
-                                                    .scaledToFill()
-                                                    .frame(width: 50, height: 50)
-                                                    .cornerRadius(8)
-                                                    .clipped()
-                                            } else {
-                                                Rectangle().fill(Color(.systemGray4))
-                                                    .frame(width: 50, height: 50).cornerRadius(8)
-                                                    .overlay { Image(systemName: "photo").foregroundStyle(.secondary) }
-                                            }
-                                            VStack(alignment: .leading) {
-                                                Text(item.name).font(.headline)
-                                                Text(item.category).font(.caption).foregroundStyle(.secondary)
-                                            }
-                                            Spacer()
-                                        }
-                                        .contentShape(Rectangle())
-                                        .onTapGesture {
-                                            recordSearch(query: item.name, item: item, location: location)
-                                            selected = SearchResult(location: location, item: item)
-                                        }
-                                    }
-                                }
-                            }
-                        }
-                    }
+                    VStack(spacing: 20) {
+                        Image(systemName: "magnifyingglass").font(.system(size: 60)).foregroundStyle(.secondary)
+                        Text("搜索你的物品").font(.headline)
+                        Text("输入物品名称、描述或分类").font(.subheadline).foregroundStyle(.secondary)
+                    }.frame(maxWidth: .infinity, maxHeight: .infinity)
                 } else if isSearching {
                     VStack {
                         Spacer()
@@ -155,6 +118,9 @@ struct SearchView: View {
                                         }
                                     }
                                     Text("\(r.location.name) · \(r.item.category)").font(.caption).foregroundStyle(.secondary)
+                                    if !r.item.attributes.isEmpty {
+                                        Text(r.item.attributes).font(.caption2).foregroundStyle(.secondary).lineLimit(1)
+                                    }
                                     Text(r.item.description).font(.caption2).foregroundStyle(.tertiary).lineLimit(1)
                                 }
                                 Spacer()
@@ -183,9 +149,6 @@ struct SearchView: View {
             }
         }
         .navigationViewStyle(.stack)
-        .onAppear {
-            self.apiKey = KeychainManager.shared.loadKey()
-        }
     }
 
     private func performSearch() {
@@ -207,8 +170,8 @@ struct SearchView: View {
     }
     
     private func smartSearch() {
-        guard !apiKey.isEmpty else {
-            // 没有API Key时显示提示
+        let config = llmManager.currentConfig
+        guard !config.apiKey.isEmpty else {
             normalSearch()
             return
         }
@@ -272,6 +235,7 @@ struct SearchView: View {
             itemsDescription += """
             \(index + 1). 名称：\(entry.item.name)
                分类：\(entry.item.category)
+               属性：\(entry.item.attributes.isEmpty ? "无" : entry.item.attributes)
                描述：\(entry.item.description.isEmpty ? "无" : entry.item.description)
                位置：\(entry.location.name)
             
@@ -311,15 +275,16 @@ struct SearchView: View {
         最多返回10个结果，按匹配度从高到低排序。
         """
         
-        let url = URL(string: "\(baseURL)/chat/completions")!
+        let config = llmManager.currentConfig
+        let url = URL(string: "\(config.baseURL)/chat/completions")!
         var request = URLRequest(url: url)
         request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
+        request.setValue("Bearer \(config.apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.timeoutInterval = 180  // 3分钟超时
+        request.timeoutInterval = 180
         
         let body: [String: Any] = [
-            "model": model,
+            "model": config.model,
             "messages": [["role": "user", "content": prompt]],
             "max_tokens": 8000
         ]
